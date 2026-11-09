@@ -76,6 +76,7 @@ export interface JoinRequest {
   name: string;
   avatar: string;
   photo?: string;
+  photoFull?: string;
   color: string;
   ts: number;
 }

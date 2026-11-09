@@ -602,8 +602,6 @@ export function CallRoom({
         room={room}
         canAdmin={canAdmin}
         presence={presence}
-        onToggleMic={toggleMic}
-        onToggleCam={toggleCam}
         onSwitchDevice={switchDevice}
         onRefreshDevices={refreshDevices}
         onRetryMedia={retryMedia}

@@ -21,6 +21,7 @@ interface MediaTestProps {
   onRefreshDevices?: () => void;
   error?: string | null;
   compact?: boolean;
+  testMode?: boolean;
   devicesOpen?: boolean;
   onRetryCamera?: () => void;
   photoFull?: string;
@@ -36,6 +37,7 @@ export function MediaTest({
   onRefreshDevices,
   error,
   compact = false,
+  testMode = false,
   devicesOpen = false,
   onRetryCamera,
   photoFull,
@@ -163,7 +165,7 @@ export function MediaTest({
               prefs.camOn ? "animate-pulse bg-lime-300" : "bg-white/25"
             }`}
           />
-          {compact ? "camera check" : "preview"}
+          {testMode ? "private check" : compact ? "camera check" : "preview"}
         </div>
         <div className="absolute inset-x-2 bottom-2 flex items-center gap-1.5">
           <button
@@ -174,7 +176,24 @@ export function MediaTest({
                 ? "border-white/12 bg-black/50 text-white/80 hover:bg-black/70"
                 : "border-rose-400/30 bg-rose-500/80 text-white"
             }`}
-            aria-label={prefs.micOn ? "Mute microphone" : "Unmute microphone"}
+            aria-label={
+              prefs.micOn
+                ? testMode
+                  ? "Mute test microphone"
+                  : "Mute microphone"
+                : testMode
+                  ? "Unmute test microphone"
+                  : "Unmute microphone"
+            }
+            title={
+              prefs.micOn
+                ? testMode
+                  ? "Mute the private test mic"
+                  : "Mute microphone"
+                : testMode
+                  ? "Unmute the private test mic"
+                  : "Unmute microphone"
+            }
           >
             {prefs.micOn ? (
               <LuMic className="h-3.5 w-3.5" />
@@ -190,7 +209,24 @@ export function MediaTest({
                 ? "border-white/12 bg-black/50 text-white/80 hover:bg-black/70"
                 : "border-rose-400/30 bg-rose-500/80 text-white"
             }`}
-            aria-label={prefs.camOn ? "Turn camera off" : "Turn camera on"}
+            aria-label={
+              prefs.camOn
+                ? testMode
+                  ? "Turn test camera off"
+                  : "Turn camera off"
+                : testMode
+                  ? "Turn test camera on"
+                  : "Turn camera on"
+            }
+            title={
+              prefs.camOn
+                ? testMode
+                  ? "Turn off the private test camera"
+                  : "Turn camera off"
+                : testMode
+                  ? "Turn on the private test camera"
+                  : "Turn camera on"
+            }
           >
             {prefs.camOn ? (
               <LuVideo className="h-3.5 w-3.5" />
@@ -210,7 +246,7 @@ export function MediaTest({
 
       <div className="mt-2 flex items-center gap-2">
         <span className="flex w-16 shrink-0 items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-white/30">
-          {activeAudio ? "mic live" : "muted"}
+          {activeAudio ? (testMode ? "test live" : "mic live") : "muted"}
         </span>
         <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-white/8">
           <div

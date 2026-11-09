@@ -39,8 +39,6 @@ interface RoomSettingsProps {
   room: RoomInfo | null;
   canAdmin: boolean;
   presence: Presence;
-  onToggleMic: () => void;
-  onToggleCam: () => void;
   onSwitchDevice: (kind: "audio" | "video", deviceId: string) => Promise<void>;
   onRefreshDevices: () => Promise<void>;
   onRetryMedia: () => void;
@@ -114,8 +112,6 @@ export function RoomSettings({
   room,
   canAdmin,
   presence,
-  onToggleMic,
-  onToggleCam,
   onSwitchDevice,
   onRefreshDevices,
   onRetryMedia,
@@ -123,8 +119,112 @@ export function RoomSettings({
   onAdminAction,
 }: RoomSettingsProps) {
   const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const level = useAudioLevel(localStream, selfMedia.micOn);
+  const [testMicOn, setTestMicOn] = useState(true);
+  const [testCamOn, setTestCamOn] = useState(true);
+  const [testStream, setTestStream] = useState<MediaStream | null>(null);
+  const [testRetry, setTestRetry] = useState(0);
+  const level = useAudioLevel(testStream, testMicOn);
   const policy = room?.joinPolicy ?? "open";
+
+  /**
+   * The in-room media test is strictly local: clone the live capture tracks
+   * so the preview and meter never touch the tracks that are being sent to
+   * other members. Toggling the test mic/camera only changes the clones.
+   */
+  useEffect(() => {
+    if (!open) {
+      setTestStream(null);
+      return;
+    }
+    let cancelled = false;
+    const stream = new MediaStream();
+    const audio = localStream?.getAudioTracks()[0];
+    const video = localStream?.getVideoTracks()[0];
+    if (audio && audio.readyState === "live") {
+      stream.addTrack(audio.clone());
+    }
+    if (video && video.readyState === "live") {
+      stream.addTrack(video.clone());
+    }
+    setTestStream(stream);
+
+    const acquireTestTrack = async (kind: "audio" | "video") => {
+      const deviceId =
+        kind === "audio" ? prefs.audioDeviceId : prefs.videoDeviceId;
+      const attempts: MediaStreamConstraints[] =
+        kind === "audio"
+          ? [
+              {
+                audio: {
+                  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                },
+              },
+              { audio: true },
+            ]
+          : [
+              {
+                video: {
+                  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                  facingMode: "user",
+                },
+              },
+              { video: true },
+            ];
+      for (const constraints of attempts) {
+        try {
+          return await navigator.mediaDevices.getUserMedia(constraints);
+        } catch {
+          /* try the next constraint set */
+        }
+      }
+      return null;
+    };
+
+    const addMissingTrack = async (
+      kind: "audio" | "video",
+      existing: MediaStreamTrack | undefined,
+    ) => {
+      if (existing && existing.readyState === "live") return;
+      const result = await acquireTestTrack(kind);
+      const track = result?.getTracks()[0];
+      if (!track) return;
+      if (cancelled) {
+        track.stop();
+        return;
+      }
+      stream.addTrack(track);
+      setTestStream(new MediaStream(stream.getTracks()));
+    };
+
+    void addMissingTrack("audio", audio);
+    void addMissingTrack("video", video);
+
+    return () => {
+      cancelled = true;
+      stream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          /* noop */
+        }
+      });
+    };
+  }, [open, localStream, testRetry, prefs.audioDeviceId, prefs.videoDeviceId]);
+
+  useEffect(() => {
+    if (!testStream) return;
+    testStream.getAudioTracks().forEach((track) => {
+      track.enabled = testMicOn;
+    });
+    testStream.getVideoTracks().forEach((track) => {
+      track.enabled = testCamOn;
+    });
+  }, [testStream, testMicOn, testCamOn]);
 
   useEffect(() => {
     if (!open) {
@@ -145,19 +245,13 @@ export function RoomSettings({
 
   const mediaPrefs: Prefs = {
     ...prefs,
-    micOn: selfMedia.micOn,
-    camOn: selfMedia.camOn,
+    micOn: testMicOn,
+    camOn: testCamOn,
   };
 
-  const handlePrefs = (patch: Partial<Prefs>) => {
-    const rest: Partial<Prefs> = { ...patch };
-    const wantsMic = rest.micOn;
-    const wantsCam = rest.camOn;
-    delete rest.micOn;
-    delete rest.camOn;
-    if (wantsMic !== undefined && wantsMic !== selfMedia.micOn) onToggleMic();
-    if (wantsCam !== undefined && wantsCam !== selfMedia.camOn) onToggleCam();
-    if (Object.keys(rest).length > 0) onPrefsChange(rest);
+  const handleTestPrefs = (patch: Partial<Prefs>) => {
+    if (patch.micOn !== undefined) setTestMicOn(patch.micOn);
+    if (patch.camOn !== undefined) setTestCamOn(patch.camOn);
   };
 
   return (
@@ -217,29 +311,53 @@ export function RoomSettings({
             </div>
 
             <div className="mt-3">
+              <div className="mb-2 flex items-start gap-2 rounded-xl border border-lime-300/15 bg-lime-300/[0.05] px-2.5 py-2">
+                <LuLock className="mt-0.5 h-3 w-3 shrink-0 text-lime-200" />
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-lime-100/90">
+                    Private check
+                  </p>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-white/40">
+                    Only you can see and hear this preview. The test buttons
+                    never change what other people see or hear.
+                  </p>
+                </div>
+              </div>
               <MediaTest
-                stream={localStream}
+                stream={testStream}
                 devices={devices}
                 level={level}
                 prefs={mediaPrefs}
-                onPrefsChange={handlePrefs}
+                onPrefsChange={handleTestPrefs}
                 onDeviceChange={(kind, deviceId) => {
                   void onSwitchDevice(kind, deviceId);
                 }}
                 onRefreshDevices={() => {
                   void onRefreshDevices();
                 }}
-                onRetryCamera={onRetryMedia}
+                onRetryCamera={() => {
+                  setTestRetry((value) => value + 1);
+                  onRetryMedia();
+                }}
                 photoFull={photoFull}
                 error={null}
                 compact
+                testMode
                 devicesOpen
               />
+              <p className="mt-1.5 text-center text-[10px] leading-relaxed text-white/30">
+                In the room: mic {selfMedia.micOn ? "on" : "off"} · camera{" "}
+                {selfMedia.camOn ? "on" : "off"}. Use the main controls to
+                change your broadcast.
+              </p>
             </div>
 
             <button
               type="button"
-              onClick={onRetryMedia}
+              onClick={() => {
+                setTestRetry((value) => value + 1);
+                onRetryMedia();
+              }}
               className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2 text-[11px] font-semibold text-white/50 transition hover:bg-white/8 hover:text-white/80"
             >
               <LuRefreshCw className="h-3.5 w-3.5" />

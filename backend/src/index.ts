@@ -39,7 +39,7 @@ const HISTORY_LIMIT = 80;
 const MESSAGE_LIMIT = 2000;
 const PHOTO_LIMIT = 420_000;
 const FULL_PHOTO_LIMIT = 900_000;
-const GIF_LIMIT = 1_600_000;
+const GIF_LIMIT = 2_100_000;
 const REACTION_COOLDOWN = 180;
 
 const REACTION_EMOJIS = [
@@ -831,7 +831,10 @@ io.on("connection", (socket: Socket) => {
         return;
       }
 
-      if (room.members.size >= room.maxSize) {
+      const alreadyInRoom = Array.from(room.members.values()).some(
+        (member) => member.userId === userId,
+      );
+      if (room.members.size >= room.maxSize && !alreadyInRoom) {
         sendRoomError(socket, "That room is already full. Try another one.", "full");
         return;
       }

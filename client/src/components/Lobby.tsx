@@ -157,6 +157,12 @@ export function Lobby({
     [],
   );
 
+  const createPrivateRoom = () => {
+    if (!canStart) return;
+    onClearError();
+    onJoin({ type: "create", kind: "private", joinPolicy });
+  };
+
   const start = () => {
     if (!canStart) return;
     onClearError();
@@ -164,10 +170,10 @@ export function Lobby({
       onJoin({ type: "random", mode: "duo" });
     } else if (mode === "party") {
       onJoin({ type: "create", kind: "party", joinPolicy });
-    } else if (roomCode.trim()) {
+    } else if (canJoinCode) {
       onJoin({ type: "join", roomId: roomCode.trim().toUpperCase() });
     } else {
-      onJoin({ type: "create", kind: "private", joinPolicy });
+      createPrivateRoom();
     }
   };
 
@@ -192,6 +198,7 @@ export function Lobby({
       avatar: nextAvatar,
       color: nextColor,
       photo: undefined,
+      photoFull: undefined,
     });
   };
 
@@ -430,6 +437,7 @@ export function Lobby({
                         ...profile,
                         avatar,
                         photo: undefined,
+                        photoFull: undefined,
                       })
                     }
                     className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-base transition ${
@@ -593,7 +601,10 @@ export function Lobby({
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-[11px] font-semibold text-white/80">
-                              {item.hostName ?? "Someone's"} party
+                              {item.hostName
+                                ? `${item.hostName}'s`
+                                : "Someone's"}{" "}
+                              party
                             </span>
                             <span className="block text-[9px] text-white/30">
                               {item.members}/{item.maxSize} people · {item.id}
@@ -651,11 +662,7 @@ export function Lobby({
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    onClearError();
-                    setRoomCode("");
-                    start();
-                  }}
+                  onClick={createPrivateRoom}
                   className="mt-1.5 w-full py-1 text-center text-[11px] text-white/35 transition hover:text-white/70"
                 >
                   or create a brand new room →
