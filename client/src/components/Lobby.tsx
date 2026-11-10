@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import {
@@ -27,6 +27,7 @@ import {
   randomColor,
 } from "../lib/constants";
 import { copyText } from "../lib/clipboard";
+import { loadLobbyPrefs, saveLobbyPrefs } from "../lib/lobbyPrefs";
 import { useMediaPreview } from "../hooks/useMediaPreview";
 import { usePresence } from "../hooks/usePresence";
 import { Avatar } from "./Avatar";
@@ -36,11 +37,10 @@ import type {
   DiscoverRoom,
   JoinIntent,
   JoinPolicy,
+  LobbyMode,
   Prefs,
   Profile,
 } from "../types";
-
-type LobbyMode = "duo" | "party" | "private";
 
 interface LobbyProps {
   profile: Profile;
@@ -77,7 +77,7 @@ const MODE_META: Array<{
   {
     id: "private",
     title: "Private room",
-    description: "Invite your people with a code.",
+    description: "Invite up to 8 people with a code.",
     icon: <LuLock className="h-4 w-4" />,
     accent: "violet",
   },
@@ -99,11 +99,16 @@ export function Lobby({
   error,
   onClearError,
 }: LobbyProps) {
-  const [mode, setMode] = useState<LobbyMode>(initialRoom ? "private" : "duo");
+  const [storedLobbyPrefs] = useState(loadLobbyPrefs);
+  const [mode, setMode] = useState<LobbyMode>(
+    initialRoom ? "private" : storedLobbyPrefs.mode,
+  );
   const [roomCode, setRoomCode] = useState(initialRoom ?? "");
   const [copied, setCopied] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
-  const [joinPolicy, setJoinPolicy] = useState<JoinPolicy>("open");
+  const [joinPolicy, setJoinPolicy] = useState<JoinPolicy>(
+    storedLobbyPrefs.joinPolicy,
+  );
   const [openRooms, setOpenRooms] = useState<DiscoverRoom[]>([]);
   const [discoverError, setDiscoverError] = useState(false);
 
@@ -120,6 +125,19 @@ export function Lobby({
       setRoomCode(initialRoom);
     }
   }, [initialRoom]);
+
+  /* Remember the last "How do you want to meet?" choice and join policy.
+     When someone arrives through an invite link the first render is forced
+     to "private"; skip saving that one, so merely opening a link never
+     overwrites the choice they saved earlier. */
+  const skipFirstLobbySaveRef = useRef(Boolean(initialRoom));
+  useEffect(() => {
+    if (skipFirstLobbySaveRef.current) {
+      skipFirstLobbySaveRef.current = false;
+      return;
+    }
+    saveLobbyPrefs({ mode, joinPolicy });
+  }, [mode, joinPolicy]);
 
   useEffect(() => {
     let active = true;
@@ -660,6 +678,9 @@ export function Lobby({
                     </button>
                   )}
                 </div>
+                <p className="mt-1.5 text-center text-[10px] text-white/25">
+                  Up to 8 people per room
+                </p>
                 <button
                   type="button"
                   onClick={createPrivateRoom}

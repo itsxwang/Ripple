@@ -1,7 +1,28 @@
 export type RoomKind = "private" | "duo" | "party";
 export type JoinPolicy = "open" | "request";
+export type LobbyMode = "duo" | "party" | "private";
+
+/** Remembered lobby choices, so people don't reselect them every visit. */
+export interface LobbyPrefs {
+  mode: LobbyMode;
+  joinPolicy: JoinPolicy;
+}
 export type MemberRole = "host" | "admin" | "member";
 export type ScreenSharePolicy = "open" | "admins" | "off";
+export type DmBlockScope = "room" | "all";
+
+/** A viewer-side block on direct messages from one member. */
+export interface DmBlock {
+  userId: string;
+  name: string;
+  avatar: string;
+  photo?: string;
+  color: string;
+  scope: DmBlockScope;
+  /** Set only when scope is "room". */
+  roomId?: string;
+  ts: number;
+}
 
 export interface MediaState {
   micOn: boolean;
@@ -36,9 +57,18 @@ export interface LocalMute {
   video: boolean;
 }
 
+/** Snapshot of the message a chat message replies to. */
+export interface ChatReply {
+  id: string;
+  name: string;
+  text: string;
+}
+
 export interface ChatMessage {
   id: string;
   from: string;
+  /** Stable profile id of the sender, so local blocks survive socket changes. */
+  fromUserId?: string;
   fromName: string;
   fromAvatar: string;
   fromPhoto?: string;
@@ -47,6 +77,10 @@ export interface ChatMessage {
   text: string;
   ts: number;
   system?: boolean;
+  /** Quoted message this one replies to. */
+  replyTo?: ChatReply;
+  /** Client-only marker for messages that arrived live (not room history). */
+  receivedAt?: number;
 }
 
 export interface Reaction {
@@ -107,6 +141,14 @@ export interface Prefs {
   camOn: boolean;
   reactionsVisible: boolean;
   reactionSounds: boolean;
+  /** Toast for messages sent to the whole room. */
+  notifyEveryone: boolean;
+  /** Master switch for direct-message toasts. */
+  notifyDms: boolean;
+  /** Per-member overrides; false mutes that member's DM toasts. */
+  dmNotifyOverrides: Record<string, boolean>;
+  /** Viewer-side DM blocks keyed by the blocked member's stable userId. */
+  dmBlocks: Record<string, DmBlock>;
   audioDeviceId?: string;
   videoDeviceId?: string;
 }
@@ -144,6 +186,11 @@ export interface Toast {
   avatar?: string;
   color?: string;
   photo?: string;
+  /** Chat message this toast points at; clicking opens it in the panel. */
+  action?: {
+    messageId: string;
+    conversation: string;
+  };
 }
 
 export interface TypingEntry {
@@ -155,6 +202,12 @@ export interface TypingEntry {
 }
 
 export type TypingMap = Record<string, TypingEntry>;
+
+/** A toast click target: which message to reveal in the chat panel. */
+export interface FocusMessage {
+  id: string;
+  nonce: number;
+}
 
 export interface AdminActionPayload {
   action:

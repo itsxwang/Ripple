@@ -79,6 +79,7 @@ interface UserInfo {
 interface ChatMessage {
   id: string;
   from: string;
+  fromUserId?: string;
   fromName: string;
   fromAvatar: string;
   fromPhoto?: string;
@@ -87,6 +88,7 @@ interface ChatMessage {
   text: string;
   ts: number;
   system?: boolean;
+  replyTo?: { id: string; name: string; text: string };
 }
 
 interface PendingRequest {
@@ -159,6 +161,17 @@ function cleanMultiline(value: unknown, max: number): string {
     .replace(/\r\n/g, "\n")
     .trim()
     .slice(0, max);
+}
+
+/** Reply quotes are snapshots, so they survive history and departing senders. */
+function cleanReply(value: unknown): ChatMessage["replyTo"] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const id = cleanText(record.id, 64);
+  const name = cleanText(record.name, 40);
+  const text = cleanMultiline(record.text, 160);
+  if (!id || !name || !text) return undefined;
+  return { id, name, text };
 }
 
 function cleanUserId(value: unknown): string {
@@ -1013,7 +1026,7 @@ io.on("connection", (socket: Socket) => {
   /* ---------------------------- chat -------------------------------- */
   socket.on(
     "chat:send",
-    (payload: { text?: unknown; to?: unknown }) => {
+    (payload: { text?: unknown; to?: unknown; replyTo?: unknown }) => {
       const actor = actorFor();
       if (!actor) return;
       const { room, member } = actor;
@@ -1027,6 +1040,7 @@ io.on("connection", (socket: Socket) => {
       const message: ChatMessage = {
         id: randomUUID(),
         from: member.id,
+        fromUserId: member.userId,
         fromName: member.name,
         fromAvatar: member.avatar,
         fromPhoto: member.photo,
@@ -1034,6 +1048,7 @@ io.on("connection", (socket: Socket) => {
         to,
         text,
         ts: Date.now(),
+        replyTo: cleanReply(payload?.replyTo),
       };
 
       if (to) {

@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  LuBell,
+  LuBellOff,
   LuEye,
   LuEyeOff,
   LuLock,
+  LuMessageSquare,
   LuMicOff,
   LuRadio,
   LuRefreshCw,
@@ -17,15 +20,20 @@ import {
 } from "react-icons/lu";
 import type {
   AdminActionPayload,
+  DmBlockScope,
   JoinPolicy,
   MediaState,
+  Member,
   Prefs,
   Presence,
   RoomInfo,
 } from "../types";
 import type { DeviceList } from "../lib/media";
+import { playTestTone } from "../lib/media";
+import { blockScopeLabel } from "../lib/dm";
 import { useAudioLevel } from "../hooks/useAudioLevel";
 import { MediaTest } from "./MediaTest";
+import { Avatar } from "./Avatar";
 
 interface RoomSettingsProps {
   open: boolean;
@@ -37,6 +45,7 @@ interface RoomSettingsProps {
   photoFull?: string;
   devices: DeviceList;
   room: RoomInfo | null;
+  members: Member[];
   canAdmin: boolean;
   presence: Presence;
   onSwitchDevice: (kind: "audio" | "video", deviceId: string) => Promise<void>;
@@ -44,6 +53,9 @@ interface RoomSettingsProps {
   onRetryMedia: () => void;
   onSetPolicy: (policy: JoinPolicy) => void;
   onAdminAction: (payload: AdminActionPayload) => void;
+  blockedUserIds: Set<string>;
+  onBlockDm: (member: Member, scope: DmBlockScope) => void;
+  onUnblockDm: (userId: string) => void;
 }
 
 function ToggleRow({
@@ -110,6 +122,7 @@ export function RoomSettings({
   photoFull,
   devices,
   room,
+  members,
   canAdmin,
   presence,
   onSwitchDevice,
@@ -117,95 +130,54 @@ export function RoomSettings({
   onRetryMedia,
   onSetPolicy,
   onAdminAction,
+  blockedUserIds,
+  onBlockDm,
+  onUnblockDm,
 }: RoomSettingsProps) {
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [testMicOn, setTestMicOn] = useState(true);
   const [testCamOn, setTestCamOn] = useState(true);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [testRetry, setTestRetry] = useState(0);
+  const [blockFor, setBlockFor] = useState<string | null>(null);
+  const testStateRef = useRef({ mic: testMicOn, cam: testCamOn });
+  testStateRef.current = { mic: testMicOn, cam: testCamOn };
   const level = useAudioLevel(testStream, testMicOn);
   const policy = room?.joinPolicy ?? "open";
+  const others = members.filter((member) => !member.isSelf);
+  const blocks = Object.values(prefs.dmBlocks).sort((a, b) => b.ts - a.ts);
 
   /**
    * The in-room media test is strictly local: clone the live capture tracks
    * so the preview and meter never touch the tracks that are being sent to
    * other members. Toggling the test mic/camera only changes the clones.
+   *
+   * We deliberately never open a second microphone/camera here. Requesting
+   * the same device twice can make the live call's track go silent (or make
+   * some OS/browser combinations play a device chime into the call), so a
+   * missing track is reported as unavailable instead.
    */
   useEffect(() => {
     if (!open) {
       setTestStream(null);
       return;
     }
-    let cancelled = false;
     const stream = new MediaStream();
     const audio = localStream?.getAudioTracks()[0];
     const video = localStream?.getVideoTracks()[0];
     if (audio && audio.readyState === "live") {
-      stream.addTrack(audio.clone());
+      const clone = audio.clone();
+      clone.enabled = testStateRef.current.mic;
+      stream.addTrack(clone);
     }
     if (video && video.readyState === "live") {
-      stream.addTrack(video.clone());
+      const clone = video.clone();
+      clone.enabled = testStateRef.current.cam;
+      stream.addTrack(clone);
     }
     setTestStream(stream);
 
-    const acquireTestTrack = async (kind: "audio" | "video") => {
-      const deviceId =
-        kind === "audio" ? prefs.audioDeviceId : prefs.videoDeviceId;
-      const attempts: MediaStreamConstraints[] =
-        kind === "audio"
-          ? [
-              {
-                audio: {
-                  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  autoGainControl: true,
-                },
-              },
-              { audio: true },
-            ]
-          : [
-              {
-                video: {
-                  ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-                  width: { ideal: 1280 },
-                  height: { ideal: 720 },
-                  facingMode: "user",
-                },
-              },
-              { video: true },
-            ];
-      for (const constraints of attempts) {
-        try {
-          return await navigator.mediaDevices.getUserMedia(constraints);
-        } catch {
-          /* try the next constraint set */
-        }
-      }
-      return null;
-    };
-
-    const addMissingTrack = async (
-      kind: "audio" | "video",
-      existing: MediaStreamTrack | undefined,
-    ) => {
-      if (existing && existing.readyState === "live") return;
-      const result = await acquireTestTrack(kind);
-      const track = result?.getTracks()[0];
-      if (!track) return;
-      if (cancelled) {
-        track.stop();
-        return;
-      }
-      stream.addTrack(track);
-      setTestStream(new MediaStream(stream.getTracks()));
-    };
-
-    void addMissingTrack("audio", audio);
-    void addMissingTrack("video", video);
-
     return () => {
-      cancelled = true;
       stream.getTracks().forEach((track) => {
         try {
           track.stop();
@@ -214,7 +186,7 @@ export function RoomSettings({
         }
       });
     };
-  }, [open, localStream, testRetry, prefs.audioDeviceId, prefs.videoDeviceId]);
+  }, [open, localStream, testRetry]);
 
   useEffect(() => {
     if (!testStream) return;
@@ -249,9 +221,41 @@ export function RoomSettings({
     camOn: testCamOn,
   };
 
+  const missingMic = localStream
+    ? localStream.getAudioTracks().length === 0
+    : false;
+  const testNotice = missingMic
+    ? "No microphone is connected to this call yet. Use Reconnect mic & camera below."
+    : null;
+
   const handleTestPrefs = (patch: Partial<Prefs>) => {
     if (patch.micOn !== undefined) setTestMicOn(patch.micOn);
     if (patch.camOn !== undefined) setTestCamOn(patch.camOn);
+  };
+
+  /**
+   * The speaker tone is played through this device's speakers, so the live
+   * microphone could pick it up and send it to everyone else. Mute both the
+   * outgoing track and the private test track for the duration of the tone,
+   * then restore exactly what was enabled before.
+   */
+  const handleTestSpeaker = async () => {
+    const live = localStream?.getAudioTracks()[0];
+    const test = testStream?.getAudioTracks()[0];
+    const liveWasEnabled = live?.enabled ?? false;
+    const testWasEnabled = test?.enabled ?? false;
+    if (live && live.readyState === "live") live.enabled = false;
+    if (test && test.readyState === "live") test.enabled = false;
+    try {
+      /* Give the encoder a moment to send silence before the tone starts. */
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 60);
+      });
+      await playTestTone();
+    } finally {
+      if (live && live.readyState === "live") live.enabled = liveWasEnabled;
+      if (test && test.readyState === "live") test.enabled = testWasEnabled;
+    }
   };
 
   return (
@@ -340,10 +344,11 @@ export function RoomSettings({
                   onRetryMedia();
                 }}
                 photoFull={photoFull}
-                error={null}
+                error={testNotice}
                 compact
                 testMode
                 devicesOpen
+                onTestSpeaker={handleTestSpeaker}
               />
               <p className="mt-1.5 text-center text-[10px] leading-relaxed text-white/30">
                 In the room: mic {selfMedia.micOn ? "on" : "off"} · camera{" "}
@@ -389,6 +394,234 @@ export function RoomSettings({
                 icon={<LuVolumeX className="h-4 w-4" />}
                 activeIcon={<LuVolume2 className="h-4 w-4" />}
               />
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-white/8 bg-white/[0.02] p-2.5">
+              <p className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                <LuBell className="h-3 w-3 text-cyan-300" />
+                Message notifications
+              </p>
+              <div className="space-y-1.5">
+                <ToggleRow
+                  label="Everyone messages"
+                  hint="Toast when someone messages the whole room."
+                  on={prefs.notifyEveryone}
+                  onToggle={() =>
+                    onPrefsChange({
+                      notifyEveryone: !prefs.notifyEveryone,
+                    })
+                  }
+                  icon={<LuBellOff className="h-4 w-4" />}
+                  activeIcon={<LuBell className="h-4 w-4" />}
+                />
+                <ToggleRow
+                  label="All direct messages"
+                  hint="Master switch for private-message toasts."
+                  on={prefs.notifyDms}
+                  onToggle={() =>
+                    onPrefsChange({ notifyDms: !prefs.notifyDms })
+                  }
+                  icon={<LuMessageSquare className="h-4 w-4" />}
+                  activeIcon={<LuBell className="h-4 w-4" />}
+                />
+              </div>
+
+              <div className="mt-2 rounded-xl border border-white/8 bg-black/20 p-2">
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+                  Direct messages per person
+                </p>
+                {others.length === 0 ? (
+                  <p className="px-1 py-1 text-[10px] text-white/25">
+                    No one else is here yet.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {others.map((member) => {
+                      const notifyOn =
+                        prefs.dmNotifyOverrides[member.userId] !== false;
+                      const activeBlock = blockedUserIds.has(member.userId);
+                      const chooserOpen = blockFor === member.userId;
+                      return (
+                        <div
+                          key={member.id}
+                          className={`rounded-xl px-1.5 py-1.5 ${
+                            activeBlock
+                              ? "bg-rose-500/[0.07] ring-1 ring-inset ring-rose-400/20"
+                              : ""
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Avatar
+                              avatar={member.avatar}
+                              color={member.color}
+                              photo={member.photo}
+                              size="xs"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-[11px] font-medium text-white/80">
+                                {member.name}
+                              </p>
+                              <p className="text-[9px] leading-snug text-white/30">
+                                {activeBlock
+                                  ? "Direct messages blocked"
+                                  : notifyOn
+                                    ? "DM notifications on"
+                                    : "DM notifications muted"}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onPrefsChange({
+                                  dmNotifyOverrides: {
+                                    ...prefs.dmNotifyOverrides,
+                                    [member.userId]: !notifyOn,
+                                  },
+                                })
+                              }
+                              aria-label={
+                                notifyOn
+                                  ? `Mute DM notifications from ${member.name} (settings)`
+                                  : `Unmute DM notifications from ${member.name} (settings)`
+                              }
+                              title={
+                                notifyOn
+                                  ? `Mute DM notifications from ${member.name}`
+                                  : `Unmute DM notifications from ${member.name}`
+                              }
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${
+                                notifyOn
+                                  ? "border-cyan-300/30 bg-cyan-400/15 text-cyan-200"
+                                  : "border-white/8 bg-white/[0.03] text-white/35 hover:bg-white/10 hover:text-white/70"
+                              }`}
+                            >
+                              {notifyOn ? (
+                                <LuBell className="h-3.5 w-3.5" />
+                              ) : (
+                                <LuBellOff className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (activeBlock) {
+                                  onUnblockDm(member.userId);
+                                  setBlockFor(null);
+                                } else {
+                                  setBlockFor(
+                                    chooserOpen ? null : member.userId,
+                                  );
+                                }
+                              }}
+                              aria-label={
+                                activeBlock
+                                  ? `Unblock DMs from ${member.name} (settings)`
+                                  : `Block DMs from ${member.name} (settings)`
+                              }
+                              title={
+                                activeBlock
+                                  ? `Unblock DMs from ${member.name}`
+                                  : `Block DMs from ${member.name}`
+                              }
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${
+                                activeBlock
+                                  ? "border-rose-400/30 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
+                                  : "border-white/8 bg-white/[0.03] text-white/35 hover:border-rose-400/25 hover:bg-rose-500/10 hover:text-rose-200"
+                              }`}
+                            >
+                              {activeBlock ? (
+                                <LuBell className="h-3.5 w-3.5" />
+                              ) : (
+                                <LuBellOff className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          </div>
+
+                          {chooserOpen && !activeBlock && (
+                            <div className="mt-1.5 rounded-lg border border-rose-400/20 bg-rose-500/[0.07] p-1.5">
+                              <p className="text-[9px] font-semibold text-rose-100/80">
+                                Block DMs from {member.name} for…
+                              </p>
+                              <div className="mt-1 grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onBlockDm(member, "room");
+                                    setBlockFor(null);
+                                  }}
+                                  className="rounded-md border border-rose-400/25 bg-rose-500/15 px-1.5 py-1.5 text-[9px] font-semibold text-rose-100 transition hover:bg-rose-500/25"
+                                >
+                                  This meeting
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onBlockDm(member, "all");
+                                    setBlockFor(null);
+                                  }}
+                                  className="rounded-md border border-rose-400/25 bg-rose-500/15 px-1.5 py-1.5 text-[9px] font-semibold text-rose-100 transition hover:bg-rose-500/25"
+                                >
+                                  All meetings
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setBlockFor(null)}
+                                className="mt-1 w-full py-0.5 text-[9px] text-white/35 transition hover:text-white/70"
+                              >
+                                cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-2 rounded-xl border border-white/8 bg-black/20 p-2">
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+                  Blocked direct messages · {blocks.length}
+                </p>
+                {blocks.length === 0 ? (
+                  <p className="px-1 py-1 text-[10px] text-white/25">
+                    You haven't blocked anyone's DMs.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {blocks.map((block) => (
+                      <div
+                        key={block.userId}
+                        className="flex items-center gap-2 rounded-lg bg-rose-500/[0.07] px-1.5 py-1.5"
+                      >
+                        <Avatar
+                          avatar={block.avatar}
+                          color={block.color}
+                          photo={block.photo}
+                          size="xs"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[11px] font-medium text-rose-100/90">
+                            {block.name}
+                          </p>
+                          <p className="truncate text-[9px] text-rose-200/45">
+                            {blockScopeLabel(block, room?.id)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onUnblockDm(block.userId)}
+                          aria-label={`Unblock ${block.name} (blocked list)`}
+                          className="shrink-0 rounded-lg border border-rose-300/25 bg-rose-400/15 px-2 py-1 text-[9px] font-semibold text-rose-100 transition hover:bg-rose-400/25"
+                        >
+                          Unblock
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             {canAdmin && room && (

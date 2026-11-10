@@ -35,14 +35,17 @@ function getContext(): AudioContext | null {
   }
 }
 
-/** A short two-note chime so people can confirm their speakers work. */
+/** A short two-note chime so people can confirm their speakers work.
+ *  Resolves once the tone has finished, so callers can keep the outgoing
+ *  microphone muted for the whole test. */
 export async function playTestTone(): Promise<void> {
   const ctx = getContext();
   if (!ctx) return;
   try {
     await ctx.resume();
     const now = ctx.currentTime;
-    [660, 880].forEach((frequency, index) => {
+    const tones = [660, 880];
+    tones.forEach((frequency, index) => {
       const oscillator = ctx.createOscillator();
       const gain = ctx.createGain();
       oscillator.type = "sine";
@@ -54,6 +57,10 @@ export async function playTestTone(): Promise<void> {
       oscillator.connect(gain).connect(ctx.destination);
       oscillator.start(start);
       oscillator.stop(start + 0.18);
+    });
+    const duration = (tones.length - 1) * 0.18 + 0.18 + 0.08;
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, duration * 1000);
     });
   } catch {
     /* audio output unavailable */

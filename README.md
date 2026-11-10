@@ -16,6 +16,10 @@ and real moderation tools. No accounts, no downloads, no recordings.
   avatar follows you into every room and is visible to everyone.
 - **Join policies** — create a room that anyone can enter, or one where new
   people must ask to be let in. The policy can be changed later from inside.
+- **Remembered choices** — your last meeting mode (instant, party, or private)
+  and join policy are stored locally, so you don't have to reselect them on
+  every visit. Invite links still open the private room panel without
+  overwriting what you saved.
 
 ### In the call
 
@@ -29,7 +33,26 @@ and real moderation tools. No accounts, no downloads, no recordings.
 - **Private rooms** — 6-character invite codes and shareable `?room=CODE` links,
   up to 8 seats.
 - **Group chat + DMs** — message everyone, or open a private conversation with a
-  single participant. Unread badges, typing indicators and DM toasts included.
+  single participant. Unread badges, typing indicators, and separate toasts for
+  everyone-messages and direct messages. Clicking a chat toast opens that
+  conversation, scrolls to the exact message and briefly highlights it.
+- **Replies** — quote any message in group chat or a DM. The reply shows the
+  author and a snippet of the original; clicking the quote jumps back to and
+  highlights that message. Quotes are stored with the reply, so they still work
+  in group history for people who join later.
+- **DM history that survives departures** — when the other person leaves, the
+  conversation stays readable with a distinct dashed "left" badge, a read-only
+  composer and an end marker. If they rejoin, the history is reattached to them
+  (and their read state is kept) instead of vanishing.
+- **Notification control** — choose whether messages to everyone notify you,
+  switch all DM toasts off, or mute toasts for one specific member. Settings
+  remembers these choices per viewer.
+- **DM blocking** — block a member's direct messages for the current meeting or
+  for all meetings. Their DMs are suppressed entirely (no messages, unread
+  badges or toasts) until you unblock them. Blocked members stay highlighted in
+  the People panel and settings, with one-click unblock. The blocked state is
+  labelled clearly in People and Settings, wrapping instead of clipping on
+  narrow screens.
 - **Reactions** — 48 emoji plus your own GIF/WebP/PNG uploads. Floating reactions
   use separate lanes so they never stack; each person can turn reactions (and
   reaction sounds) off for their own view.
@@ -41,7 +64,10 @@ and real moderation tools. No accounts, no downloads, no recordings.
 - **Screen-share policy** — party hosts choose whether everyone, only admins, or
   nobody can share. A host can also turn off screen sharing for one member.
 - **Device switching & audio test** — change camera/microphone and test your
-  speaker without leaving the call.
+  speaker without leaving the call. The in-room mic/camera check uses private
+  clones of your live tracks, so it never broadcasts test audio or video, and
+  the speaker tone briefly mutes your outgoing mic so other members don't hear
+  it.
 - **Keyboard shortcuts** — `M` mic, `V` camera, `S` screen, `H` hand, `C` chat,
   `P` people, `Esc` close. Ignored while typing in a text field.
 - **Raise hand** — quietly signal that you want to speak.
@@ -169,7 +195,8 @@ camera/mic access on another device, serve the client over HTTPS or
   toggles use `replaceTrack` instead of renegotiation.
 - Chat is sent over Socket.IO. Group messages are broadcast to the room and
   stored in SQLite; direct messages are delivered only to the sender and
-  recipient (and are not persisted).
+  recipient (and are not persisted). Notification preferences and DM blocks are
+  viewer-side and stored locally, keyed by each member's stable anonymous id.
 - Rooms, host/admin roles, bans, join policies and group chat history live in
   SQLite, so a restart does not lose a room's identity, moderation state or
   history. Abandoned rooms expire from the database after 30 days.

@@ -281,32 +281,53 @@ export function useMediaPreview(
     let context: AudioContext | null = null;
     let source: MediaStreamAudioSourceNode | null = null;
     let timer: number | null = null;
-    try {
-      context = new AudioContext();
-      source = context.createMediaStreamSource(new MediaStream([track]));
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.6;
-      source.connect(analyser);
-      const data = new Uint8Array(new ArrayBuffer(analyser.fftSize));
-      timer = window.setInterval(() => {
-        if (track.enabled === false) {
-          setLevel(0);
+    let cancelled = false;
+    let smoothed = 0;
+
+    const start = async () => {
+      try {
+        context = new AudioContext();
+        if (context.state === "suspended") await context.resume();
+        if (cancelled) {
+          void context.close().catch(() => undefined);
           return;
         }
-        analyser.getByteTimeDomainData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i += 1) {
-          const value = (data[i] - 128) / 128;
-          sum += value * value;
-        }
-        const rms = Math.sqrt(sum / data.length);
-        setLevel(Math.min(1, rms * 6));
-      }, 90);
-    } catch {
-      /* meter is optional */
-    }
+        source = context.createMediaStreamSource(new MediaStream([track]));
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.6;
+        source.connect(analyser);
+        const data = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+        timer = window.setInterval(() => {
+          if (track.readyState !== "live" || !track.enabled) {
+            smoothed = 0;
+            setLevel(0);
+            return;
+          }
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 1) {
+            const value = (data[i] - 128) / 128;
+            sum += value * value;
+          }
+          const rms = Math.sqrt(sum / data.length);
+          const target = Math.max(0, Math.min(1, (rms - 0.012) * 7));
+          smoothed =
+            target > smoothed
+              ? smoothed + (target - smoothed) * 0.6
+              : smoothed * 0.82;
+          if (smoothed < 0.01) smoothed = 0;
+          setLevel(smoothed);
+        }, 90);
+      } catch {
+        /* meter is optional */
+      }
+    };
+
+    void start();
+
     return () => {
+      cancelled = true;
       if (timer) window.clearInterval(timer);
       try {
         source?.disconnect();

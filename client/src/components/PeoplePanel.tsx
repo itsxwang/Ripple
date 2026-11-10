@@ -1,6 +1,8 @@
 import { useState } from "react";
 import {
   LuBan,
+  LuBell,
+  LuBellOff,
   LuCheck,
   LuClock,
   LuCopy,
@@ -29,6 +31,7 @@ import {
 } from "react-icons/lu";
 import type {
   AdminActionPayload,
+  DmBlockScope,
   JoinPolicy,
   LocalMute,
   Member,
@@ -60,6 +63,9 @@ interface PeoplePanelProps {
   localMutes: Record<string, LocalMute>;
   onToggleLocalMute: (userId: string, kind: "audio" | "video") => void;
   onFocus: (id: string) => void;
+  blockedUserIds: Set<string>;
+  onBlockDm: (member: Member, scope: DmBlockScope) => void;
+  onUnblockDm: (userId: string) => void;
 }
 
 interface ActionButtonProps {
@@ -126,12 +132,16 @@ export function PeoplePanel({
   localMutes,
   onToggleLocalMute,
   onFocus,
+  blockedUserIds,
+  onBlockDm,
+  onUnblockDm,
 }: PeoplePanelProps) {
   const [copied, setCopied] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [banFor, setBanFor] = useState<string | null>(null);
   const [banReason, setBanReason] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [blockFor, setBlockFor] = useState<string | null>(null);
 
   const requests = room?.requests ?? [];
   const bans = room?.bans ?? [];
@@ -168,6 +178,8 @@ export function PeoplePanel({
               roleFor(room?.hostId ?? "", room?.admins ?? [], member.userId);
             const menuOpen = menuFor === member.id;
             const banOpen = banFor === member.userId;
+            const blockOpen = blockFor === member.id;
+            const dmBlocked = blockedUserIds.has(member.userId);
             const local = localMutes[member.userId] ?? {
               audio: false,
               video: false,
@@ -176,7 +188,11 @@ export function PeoplePanel({
             return (
               <div
                 key={member.id}
-                className="rounded-2xl px-2 py-1.5 transition hover:bg-white/[0.025]"
+                className={`rounded-2xl px-2 py-1.5 transition ${
+                  dmBlocked
+                    ? "bg-rose-500/[0.06] ring-1 ring-inset ring-rose-400/25"
+                    : "hover:bg-white/[0.025]"
+                }`}
               >
                 <div className="flex items-center gap-2.5">
                   <Avatar
@@ -187,14 +203,16 @@ export function PeoplePanel({
                     speaking={active}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-white/90">
+                    <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-sm font-medium text-white/90">
                       {role === "host" && (
                         <LuCrown className="h-3 w-3 shrink-0 text-amber-300" />
                       )}
                       {role === "admin" && (
                         <LuShieldCheck className="h-3 w-3 shrink-0 text-violet-300" />
                       )}
-                      <span className="truncate">{member.name}</span>
+                      <span className="min-w-0 max-w-full truncate">
+                        {member.name}
+                      </span>
                       {isSelf && (
                         <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-white/50">
                           you
@@ -211,12 +229,22 @@ export function PeoplePanel({
                           {ROLE_LABELS[role]}
                         </span>
                       )}
-                    </p>
-                    <p className="flex items-center gap-1.5 truncate text-[11px] text-white/35">
-                      {member.handRaised && (
-                        <LuHand className="h-3 w-3 shrink-0 text-amber-300" />
+                      {dmBlocked && (
+                        <span className="shrink-0 rounded-full bg-rose-400/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-rose-200">
+                          DM blocked
+                        </span>
                       )}
-                      {member.restricted.mic || member.restricted.cam ? (
+                    </p>
+                    <p className="flex min-w-0 items-start gap-1.5 text-[11px] leading-relaxed text-white/35">
+                      {member.handRaised && (
+                        <LuHand className="mt-0.5 h-3 w-3 shrink-0 text-amber-300" />
+                      )}
+                      {dmBlocked ? (
+                        <span className="flex min-w-0 items-center gap-1 text-rose-300/80">
+                          <LuBellOff className="h-3 w-3 shrink-0" />
+                          Direct messages blocked
+                        </span>
+                      ) : member.restricted.mic || member.restricted.cam ? (
                         <span className="text-amber-300/80">restricted</span>
                       ) : active ? (
                         "Speaking…"
@@ -315,6 +343,44 @@ export function PeoplePanel({
                     </button>
                   )}
 
+                  {!isSelf && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (dmBlocked) {
+                          onUnblockDm(member.userId);
+                          setBlockFor(null);
+                        } else {
+                          setBlockFor(blockOpen ? null : member.id);
+                        }
+                      }}
+                      title={
+                        dmBlocked
+                          ? `Unblock DMs from ${member.name}`
+                          : `Block DMs from ${member.name}`
+                      }
+                      aria-label={
+                        dmBlocked
+                          ? `Unblock DMs from ${member.name}`
+                          : `Block DMs from ${member.name}`
+                      }
+                      aria-expanded={blockOpen}
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition ${
+                        dmBlocked
+                          ? "border-rose-400/30 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
+                          : blockOpen
+                            ? "border-rose-300/30 bg-rose-400/10 text-rose-200"
+                            : "border-white/8 bg-white/[0.04] text-white/40 hover:border-rose-400/25 hover:bg-rose-500/10 hover:text-rose-200"
+                      }`}
+                    >
+                      {dmBlocked ? (
+                        <LuBell className="h-3.5 w-3.5" />
+                      ) : (
+                        <LuBellOff className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+
                   {canAdmin && !isSelf && (
                     <button
                       type="button"
@@ -339,6 +405,47 @@ export function PeoplePanel({
                     </button>
                   )}
                 </div>
+
+                {blockOpen && !isSelf && !dmBlocked && (
+                  <div className="mt-2 rounded-xl border border-rose-400/20 bg-rose-500/[0.07] p-2">
+                    <p className="text-[10px] font-semibold text-rose-100/85">
+                      Block DMs from {member.name} for…
+                    </p>
+                    <p className="mt-0.5 text-[9px] leading-relaxed text-white/35">
+                      Their direct messages won't reach you until you unblock
+                      them.
+                    </p>
+                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onBlockDm(member, "room");
+                          setBlockFor(null);
+                        }}
+                        className="rounded-lg border border-rose-400/25 bg-rose-500/15 px-2 py-1.5 text-[10px] font-semibold text-rose-100 transition hover:bg-rose-500/25"
+                      >
+                        This meeting
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onBlockDm(member, "all");
+                          setBlockFor(null);
+                        }}
+                        className="rounded-lg border border-rose-400/25 bg-rose-500/15 px-2 py-1.5 text-[10px] font-semibold text-rose-100 transition hover:bg-rose-500/25"
+                      >
+                        All meetings
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setBlockFor(null)}
+                      className="mt-1.5 w-full py-1 text-[10px] text-white/35 transition hover:text-white/70"
+                    >
+                      cancel
+                    </button>
+                  </div>
+                )}
 
                 {menuOpen && canAdmin && !isSelf && (
                   <div className="mt-2 rounded-2xl border border-white/8 bg-black/25 p-1.5">

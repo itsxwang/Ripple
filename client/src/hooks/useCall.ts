@@ -7,10 +7,14 @@ import {
   roleFor,
 } from "../lib/constants";
 import { enumerateDevices, playReactionPop, type DeviceList } from "../lib/media";
+import { isDmBlocked } from "../lib/dm";
 import { getUserId } from "../lib/prefs";
 import type {
   AdminActionPayload,
   ChatMessage,
+  ChatReply,
+  DmBlock,
+  DmBlockScope,
   JoinIntent,
   JoinPolicy,
   LocalMute,
@@ -134,6 +138,12 @@ export function useCall(
   });
   const [selfId, setSelfId] = useState("");
   const [others, setOthers] = useState<Member[]>([]);
+  const othersRef = useRef<Member[]>([]);
+  othersRef.current = others;
+  /* Snapshots of members who left, so DM history stays readable and labelled. */
+  const [departed, setDeparted] = useState<Member[]>([]);
+  const departedRef = useRef<Member[]>([]);
+  departedRef.current = departed;
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<
@@ -263,6 +273,7 @@ export function useCall(
       avatar?: string,
       color?: string,
       photo?: string,
+      action?: Toast["action"],
     ) => {
       const toast: Toast = {
         id: uid(),
@@ -272,6 +283,7 @@ export function useCall(
         avatar,
         color,
         photo,
+        action,
       };
       setToasts((prev) => [...prev.slice(-3), toast]);
       window.setTimeout(() => {
@@ -282,6 +294,10 @@ export function useCall(
     },
     [],
   );
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((item) => item.id !== id));
+  }, []);
 
   /* ---------------------------- peers ------------------------------ */
   const resetPeers = useCallback(() => {
@@ -562,11 +578,11 @@ export function useCall(
    * showing a permanently frozen tile.
    */
   const recoverDevice = useCallback(
-    async (kind: "audio" | "video", announce = true) => {
+    async (kind: "audio" | "video", announce = true, force = false) => {
       if (!mountedRef.current || leavingRef.current) return;
       if (recoveringRef.current.has(kind)) return;
       const media = selfMediaRef.current;
-      if (kind === "audio" ? !media.micOn : !media.camOn) return;
+      if (!force && (kind === "audio" ? !media.micOn : !media.camOn)) return;
       if (kind === "audio" && selfRef.current.restricted.mic) return;
       if (kind === "video" && selfRef.current.restricted.cam) return;
       if (kind === "video" && screenTrackRef.current) return;
@@ -590,10 +606,16 @@ export function useCall(
           addLocalTrack(track);
           attachAnalyser("self", localStreamRef.current ?? new MediaStream([track]));
           await replaceOutgoing("audio", track);
+          const next = { ...selfMediaRef.current, micOn: true };
+          selfMediaRef.current = next;
+          setSelfMedia(next);
         } else {
           cameraTrackRef.current = track;
           addLocalTrack(track);
           await replaceOutgoing("video", track);
+          const next = { ...selfMediaRef.current, camOn: true };
+          selfMediaRef.current = next;
+          setSelfMedia(next);
         }
         track.onended = () => {
           if (track.readyState === "ended") void recoverDevice(kind);
@@ -763,11 +785,22 @@ export function useCall(
       return;
     }
     const track = localStreamRef.current?.getAudioTracks()[0];
-    if (track && track.readyState === "live" && !track.muted) {
-      track.enabled = !track.enabled;
-      const next = { ...selfMediaRef.current, micOn: track.enabled };
+    if (track && track.readyState === "live") {
+      const nextEnabled = !track.enabled;
+      track.enabled = nextEnabled;
+      const next = { ...selfMediaRef.current, micOn: nextEnabled };
       selfMediaRef.current = next;
       setSelfMedia(next);
+      /* Some OS/driver combinations leave a live track "muted" without
+         firing `ended`. If turning it back on doesn't restore audio,
+         reacquire the device shortly afterwards. */
+      if (nextEnabled && track.muted) {
+        window.setTimeout(() => {
+          if (track.muted && track.enabled) {
+            void recoverDevice("audio", false, true);
+          }
+        }, 600);
+      }
       return;
     }
     void (async () => {
@@ -798,6 +831,7 @@ export function useCall(
     attachAnalyser,
     ensureAudioContext,
     notify,
+    recoverDevice,
     replaceOutgoing,
     watchTrack,
   ]);
@@ -821,11 +855,19 @@ export function useCall(
       return;
     }
     const track = cameraTrackRef.current;
-    if (track && track.readyState === "live" && !track.muted) {
-      track.enabled = !track.enabled;
-      const next = { ...selfMediaRef.current, camOn: track.enabled };
+    if (track && track.readyState === "live") {
+      const nextEnabled = !track.enabled;
+      track.enabled = nextEnabled;
+      const next = { ...selfMediaRef.current, camOn: nextEnabled };
       selfMediaRef.current = next;
       setSelfMedia(next);
+      if (nextEnabled && track.muted) {
+        window.setTimeout(() => {
+          if (track.muted && track.enabled) {
+            void recoverDevice("video", false, true);
+          }
+        }, 600);
+      }
       return;
     }
     void (async () => {
@@ -852,6 +894,7 @@ export function useCall(
     addLocalTrack,
     ensureAudioContext,
     notify,
+    recoverDevice,
     replaceOutgoing,
     watchTrack,
   ]);
@@ -989,6 +1032,7 @@ export function useCall(
     setRoom(null);
     roomRef.current = null;
     setOthers([]);
+    setDeparted([]);
     setMessages([]);
     setTyping({});
     setReactions([]);
@@ -1031,11 +1075,18 @@ export function useCall(
     [exitToLobby],
   );
 
-  const sendMessage = useCallback((text: string, to?: string) => {
-    const clean = text.trim();
-    if (!clean) return;
-    socketRef.current?.emit("chat:send", { text: clean, to: to ?? null });
-  }, []);
+  const sendMessage = useCallback(
+    (text: string, to?: string, replyTo?: ChatReply) => {
+      const clean = text.trim();
+      if (!clean) return;
+      socketRef.current?.emit("chat:send", {
+        text: clean,
+        to: to ?? null,
+        replyTo: replyTo ?? null,
+      });
+    },
+    [],
+  );
 
   const sendTyping = useCallback((to?: string) => {
     socketRef.current?.emit("chat:typing", { to: to ?? null });
@@ -1068,8 +1119,12 @@ export function useCall(
 
   const retryMedia = useCallback(() => {
     const media = selfMediaRef.current;
-    if (media.micOn) void recoverDevice("audio");
-    if (media.camOn) void recoverDevice("video");
+    const audio = localStreamRef.current?.getAudioTracks()[0];
+    const video = cameraTrackRef.current;
+    /* Explicit reconnect should also rescue a track that failed to start,
+       even if that left the mic/camera state at "off". */
+    if (media.micOn || !audio) void recoverDevice("audio", false, !media.micOn);
+    if (media.camOn || !video) void recoverDevice("video", false, !media.camOn);
   }, [recoverDevice]);
 
   const setJoinPolicy = useCallback((policy: JoinPolicy) => {
@@ -1102,6 +1157,63 @@ export function useCall(
 
   const updatePrefs = useCallback(
     (patch: Partial<Prefs>) => onPrefsChange(patch),
+    [onPrefsChange],
+  );
+
+  /** Remember a DM block and immediately drop any of that member's DMs. */
+  const blockDm = useCallback(
+    (member: Member, scope: DmBlockScope) => {
+      const block: DmBlock = {
+        userId: member.userId,
+        name: member.name,
+        avatar: member.avatar,
+        photo: member.photo,
+        color: member.color,
+        scope,
+        roomId: scope === "room" ? roomRef.current?.id : undefined,
+        ts: Date.now(),
+      };
+      const dmBlocks = { ...prefsRef.current.dmBlocks, [member.userId]: block };
+      /* Update the ref right away so DMs that arrive before the next render
+         are already filtered. */
+      prefsRef.current = { ...prefsRef.current, dmBlocks };
+      onPrefsChange({ dmBlocks });
+
+      const selfId = selfIdRef.current;
+      setMessages((prev) =>
+        prev.filter(
+          (message) =>
+            !(
+              message.to === selfId &&
+              (message.fromUserId === member.userId ||
+                message.from === member.id)
+            ),
+        ),
+      );
+      setTyping((prev) => {
+        const next = { ...prev };
+        for (const [key, entry] of Object.entries(next)) {
+          if (
+            entry.to === selfId &&
+            (entry.userId === member.userId || entry.from === member.id)
+          ) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+    },
+    [onPrefsChange],
+  );
+
+  const unblockDm = useCallback(
+    (targetUserId: string) => {
+      if (!prefsRef.current.dmBlocks[targetUserId]) return;
+      const dmBlocks = { ...prefsRef.current.dmBlocks };
+      delete dmBlocks[targetUserId];
+      prefsRef.current = { ...prefsRef.current, dmBlocks };
+      onPrefsChange({ dmBlocks });
+    },
     [onPrefsChange],
   );
 
@@ -1437,6 +1549,7 @@ export function useCall(
         }
         resetPeers();
         setOthers([]);
+        setDeparted([]);
         setMatching(false);
         if (roomRef.current) {
           rejoinRef.current = true;
@@ -1488,6 +1601,7 @@ export function useCall(
         });
         resetPeers();
         setOthers(payload.members);
+        setDeparted([]);
         setMessages(payload.history ?? []);
         setTyping({});
         setReactions([]);
@@ -1501,10 +1615,33 @@ export function useCall(
 
       socket.on("member:joined", ({ member }: { member: Member }) => {
         if (!mountedRef.current) return;
+        /* If this profile is rejoining after leaving, keep their DM history
+           attached by moving it from the old member id to the new one. */
+        const returning = departedRef.current.find(
+          (item) => item.userId === member.userId && item.id !== member.id,
+        );
+        if (returning) {
+          const previousId = returning.id;
+          setMessages((prev) =>
+            prev.map((message) => {
+              if (message.from === previousId) {
+                return { ...message, from: member.id };
+              }
+              if (message.to === previousId) {
+                return { ...message, to: member.id };
+              }
+              return message;
+            }),
+          );
+        }
         setOthers((prev) => [
           ...prev.filter((item) => item.userId !== member.userId),
           member,
         ]);
+        /* Rejoining clears the "left" snapshot for this profile. */
+        setDeparted((prev) =>
+          prev.filter((item) => item.userId !== member.userId),
+        );
         notify(
           "join",
           member.name,
@@ -1517,6 +1654,18 @@ export function useCall(
 
       socket.on("member:left", ({ id, name }: { id: string; name: string }) => {
         if (!mountedRef.current) return;
+        const leaving = othersRef.current.find((member) => member.id === id);
+        if (leaving) {
+          setDeparted((prev) => [
+            ...prev.filter((member) => member.userId !== leaving.userId),
+            {
+              ...leaving,
+              media: EMPTY_MEDIA,
+              handRaised: false,
+              restricted: NO_RESTRICTION,
+            },
+          ]);
+        }
         setOthers((prev) => prev.filter((member) => member.id !== id));
         closePeer(id);
         setTyping((prev) => {
@@ -1683,14 +1832,55 @@ export function useCall(
 
       socket.on("chat:new", (message: ChatMessage) => {
         if (!mountedRef.current) return;
+        const selfId = selfIdRef.current;
+        const senderUserId =
+          message.fromUserId ??
+          (message.from === selfId
+            ? userIdRef.current
+            : othersRef.current.find((member) => member.id === message.from)
+                ?.userId);
+        /* Blocking is viewer-side: the server still routes the DM, but it
+           never reaches this member's message list, unread count or toasts. */
+        if (
+          message.to &&
+          message.to === selfId &&
+          senderUserId &&
+          isDmBlocked(
+            prefsRef.current.dmBlocks[senderUserId],
+            roomRef.current?.id,
+          )
+        ) {
+          return;
+        }
         setMessages((prev) => {
           if (prev.some((item) => item.id === message.id)) return prev;
-          return [...prev, message].slice(-220);
+          return [
+            ...prev,
+            { ...message, receivedAt: Date.now() },
+          ].slice(-220);
         });
       });
 
       socket.on("chat:typing", (entry: TypingPayload) => {
         if (!mountedRef.current) return;
+        const selfId = selfIdRef.current;
+        const senderUserId =
+          entry.userId ??
+          (entry.from === selfId
+            ? userIdRef.current
+            : othersRef.current.find((member) => member.id === entry.from)
+                ?.userId);
+        if (
+          entry.to &&
+          entry.to === selfId &&
+          senderUserId &&
+          isDmBlocked(
+            prefsRef.current.dmBlocks[senderUserId],
+            roomRef.current?.id,
+          )
+        ) {
+          return;
+        }
         setTyping((prev) => ({
           ...prev,
           [entry.from]: {
@@ -1875,6 +2065,7 @@ export function useCall(
     selfId,
     userId,
     others,
+    departed,
     localStream,
     screenStream,
     remoteStreams,
@@ -1902,6 +2093,7 @@ export function useCall(
     sendTyping,
     sendReaction,
     notify,
+    dismissToast,
     adminAction,
     setJoinPolicy,
     approveRequest,
@@ -1912,6 +2104,8 @@ export function useCall(
     refreshDevices,
     toggleLocalMute,
     retryMedia,
+    blockDm,
+    unblockDm,
   };
 }
 

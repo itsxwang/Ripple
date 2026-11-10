@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   LuMic,
   LuMicOff,
@@ -25,6 +25,8 @@ interface MediaTestProps {
   devicesOpen?: boolean;
   onRetryCamera?: () => void;
   photoFull?: string;
+  /** Override the speaker test so an in-call test can mute outgoing audio. */
+  onTestSpeaker?: () => void | Promise<void>;
 }
 
 export function MediaTest({
@@ -41,8 +43,10 @@ export function MediaTest({
   devicesOpen = false,
   onRetryCamera,
   photoFull,
+  onTestSpeaker,
 }: MediaTestProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [tonePlaying, setTonePlaying] = useState(false);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -54,6 +58,16 @@ export function MediaTest({
 
   const activeAudio = Boolean(stream?.getAudioTracks().some((track) => track.enabled));
   const hasVideo = Boolean(stream?.getVideoTracks().length);
+
+  const handleTestSpeaker = async () => {
+    if (tonePlaying) return;
+    setTonePlaying(true);
+    try {
+      await (onTestSpeaker ? onTestSpeaker() : playTestTone());
+    } finally {
+      setTonePlaying(false);
+    }
+  };
 
   const devicePicker = (
     <div className="grid gap-2">
@@ -236,10 +250,12 @@ export function MediaTest({
           </button>
           <button
             type="button"
-            onClick={() => void playTestTone()}
-            className="ml-auto flex items-center gap-1.5 rounded-full border border-cyan-300/25 bg-cyan-400/15 px-2.5 py-1.5 text-[10px] font-semibold text-cyan-100 backdrop-blur transition hover:bg-cyan-400/25 active:scale-95"
+            onClick={() => void handleTestSpeaker()}
+            disabled={tonePlaying}
+            className="ml-auto flex items-center gap-1.5 rounded-full border border-cyan-300/25 bg-cyan-400/15 px-2.5 py-1.5 text-[10px] font-semibold text-cyan-100 backdrop-blur transition hover:bg-cyan-400/25 active:scale-95 disabled:cursor-wait disabled:opacity-60"
           >
-            <LuVolume2 className="h-3 w-3" /> Test speaker
+            <LuVolume2 className="h-3 w-3" />
+            {tonePlaying ? "Playing…" : "Test speaker"}
           </button>
         </div>
       </div>

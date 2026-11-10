@@ -14,13 +14,25 @@ import {
   LuUsers,
   LuWifiOff,
 } from "react-icons/lu";
-import type { JoinIntent, Prefs, Profile } from "../types";
+import type {
+  FocusMessage,
+  JoinIntent,
+  Member,
+  Prefs,
+  Profile,
+  Toast,
+} from "../types";
 import { useCall } from "../hooks/useCall";
 import {
   ROOM_LABELS,
   formatDuration,
   inviteLink,
 } from "../lib/constants";
+import {
+  blockedUserIdsForRoom,
+  dmNotificationsEnabled,
+  isDmBlocked,
+} from "../lib/dm";
 import { copyText } from "../lib/clipboard";
 import { Aurora } from "./Aurora";
 import { ControlBar } from "./ControlBar";
@@ -99,6 +111,7 @@ export function CallRoom({
     selfId,
     userId,
     others,
+    departed,
     localStream,
     screenStream,
     remoteStreams,
@@ -125,6 +138,7 @@ export function CallRoom({
     sendTyping,
     sendReaction,
     notify,
+    dismissToast,
     adminAction,
     setJoinPolicy,
     approveRequest,
@@ -134,6 +148,8 @@ export function CallRoom({
     refreshDevices,
     toggleLocalMute,
     retryMedia,
+    blockDm,
+    unblockDm,
   } = engine;
 
   const [panel, setPanel] = useState<PanelTab | null>(null);
@@ -143,9 +159,51 @@ export function CallRoom({
   const [copied, setCopied] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pinnedId, setPinnedId] = useState<string | null>(null);
+  const [focusMessage, setFocusMessage] = useState<FocusMessage | null>(null);
   const lastMessageRef = useRef<string | null>(null);
+  const seenDepartedRef = useRef<Member[]>([]);
 
   const members = useMemo(() => [self, ...others], [self, others]);
+  const roomId = room?.id ?? null;
+  const blockedUserIds = useMemo(
+    () => blockedUserIdsForRoom(prefs.dmBlocks, roomId),
+    [prefs.dmBlocks, roomId],
+  );
+  /* Safety net for DMs that were already in memory when a block was added. */
+  const visibleMessages = useMemo(
+    () =>
+      messages.filter((message) => {
+        if (!message.to || message.to !== selfId) return true;
+        const senderUserId =
+          message.fromUserId ??
+          others.find((member) => member.id === message.from)?.userId;
+        return !isDmBlocked(
+          senderUserId ? prefs.dmBlocks[senderUserId] : undefined,
+          roomId,
+        );
+      }),
+    [messages, selfId, others, prefs.dmBlocks, roomId],
+  );
+  /* Keep DM conversations with people who left, but only when there is
+     actual history to read. Live members always come first. */
+  const chatMembers = useMemo(() => {
+    const hasDmHistory = (member: Member) =>
+      visibleMessages.some(
+        (message) =>
+          Boolean(message.to) &&
+          ((message.from === member.id && message.to === selfId) ||
+            (message.from === selfId && message.to === member.id)),
+      );
+    return [...others, ...departed.filter(hasDmHistory)];
+  }, [others, departed, visibleMessages, selfId]);
+  const leftIds = useMemo(() => {
+    const live = new Set(others.map((member) => member.id));
+    return new Set(
+      chatMembers
+        .filter((member) => !live.has(member.id))
+        .map((member) => member.id),
+    );
+  }, [chatMembers, others]);
   const isRandom = intent.type === "random";
   const canAdmin = self.role !== "member";
   const requests = room?.requests ?? [];
@@ -223,16 +281,33 @@ export function CallRoom({
     return () => window.clearInterval(timer);
   }, [room?.id]);
 
+  /* A departed member who rejoins keeps their read state, even though the
+     server hands them a new member id. */
+  useEffect(() => {
+    const before = seenDepartedRef.current;
+    seenDepartedRef.current = departed;
+    for (const old of before) {
+      if (departed.some((item) => item.userId === old.userId)) continue;
+      const live = others.find((item) => item.userId === old.userId);
+      if (!live || live.id === old.id) continue;
+      setSeen((current) =>
+        current[old.id] === undefined
+          ? current
+          : { ...current, [live.id]: current[old.id] },
+      );
+    }
+  }, [departed, others]);
+
   useEffect(() => {
     if (conversation === "group") return;
-    if (!others.some((member) => member.id === conversation)) {
+    if (!chatMembers.some((member) => member.id === conversation)) {
       setConversation("group");
     }
-  }, [others, conversation]);
+  }, [chatMembers, conversation]);
 
   const unread = useMemo(() => {
     const map: Record<string, number> = {};
-    for (const message of messages) {
+    for (const message of visibleMessages) {
       if (message.system || message.from === selfId) continue;
       const key = message.to
         ? message.to === selfId
@@ -244,14 +319,16 @@ export function CallRoom({
       }
     }
     return map;
-  }, [messages, seen, selfId]);
+  }, [visibleMessages, seen, selfId]);
 
   const unreadTotal = useMemo(
     () => Object.values(unread).reduce((total, value) => total + value, 0),
     [unread],
   );
 
-  const lastTs = messages.length ? messages[messages.length - 1].ts : 0;
+  const lastTs = visibleMessages.length
+    ? visibleMessages[visibleMessages.length - 1].ts
+    : 0;
 
   useEffect(() => {
     if (panel !== "chat") return;
@@ -259,20 +336,56 @@ export function CallRoom({
   }, [panel, conversation, lastTs]);
 
   useEffect(() => {
-    const last = messages[messages.length - 1];
+    const last = visibleMessages[visibleMessages.length - 1];
     if (!last || last.id === lastMessageRef.current) return;
     lastMessageRef.current = last.id;
-    if (last.system || last.from === selfId || !last.to) return;
-    if (panel === "chat" && conversation === last.from) return;
+    /* `receivedAt` is only set for live messages. Room history is loaded
+       without it, so joining a room never replays old notifications. */
+    if (last.system || last.from === selfId || !last.receivedAt) return;
+    const senderUserId =
+      last.fromUserId ??
+      others.find((member) => member.id === last.from)?.userId;
+
+    if (last.to) {
+      if (last.to !== selfId) return;
+      if (isDmBlocked(senderUserId ? prefs.dmBlocks[senderUserId] : undefined, roomId)) {
+        return;
+      }
+      if (!dmNotificationsEnabled(prefs, senderUserId)) return;
+      if (panel === "chat" && conversation === last.from) return;
+      notify(
+        "info",
+        `${last.fromName} sent you a DM`,
+        last.text.length > 64 ? `${last.text.slice(0, 64)}…` : last.text,
+        last.fromAvatar,
+        last.fromColor,
+        last.fromPhoto,
+        { messageId: last.id, conversation: last.from },
+      );
+      return;
+    }
+
+    if (!prefs.notifyEveryone) return;
+    if (panel === "chat" && conversation === "group") return;
     notify(
       "info",
-      `${last.fromName} sent you a DM`,
+      `${last.fromName} to everyone`,
       last.text.length > 64 ? `${last.text.slice(0, 64)}…` : last.text,
       last.fromAvatar,
       last.fromColor,
       last.fromPhoto,
+      { messageId: last.id, conversation: "group" },
     );
-  }, [messages, panel, conversation, selfId, notify]);
+  }, [
+    visibleMessages,
+    panel,
+    conversation,
+    selfId,
+    notify,
+    prefs,
+    others,
+    roomId,
+  ]);
 
   const copyInvite = async () => {
     if (!room) return;
@@ -289,6 +402,26 @@ export function CallRoom({
   const openChatWith = (id?: string) => {
     if (id) setConversation(id);
     setPanel("chat");
+  };
+
+  /** A chat toast opens the panel and scrolls straight to that message. */
+  const openToast = (toast: Toast) => {
+    if (!toast.action) return;
+    dismissToast(toast.id);
+    /* Resolve the conversation from the live message so toasts still land
+       correctly after a sender leaves and rejoins with a new member id. */
+    const target = visibleMessages.find(
+      (message) => message.id === toast.action?.messageId,
+    );
+    const conversationId = target
+      ? target.to
+        ? target.to === selfId
+          ? target.from
+          : target.to
+        : "group"
+      : toast.action.conversation;
+    openChatWith(conversationId);
+    setFocusMessage({ id: toast.action.messageId, nonce: Date.now() });
   };
 
   const overlay = error ? (
@@ -511,9 +644,12 @@ export function CallRoom({
               onClose={() => setPanel(null)}
               unreadTotal={unreadTotal}
               members={members}
+              chatMembers={chatMembers}
+              leftIds={leftIds}
+              focusMessage={focusMessage}
               selfId={selfId}
               selfUserId={userId}
-              messages={messages}
+              messages={visibleMessages}
               typing={typing}
               conversation={conversation}
               onConversationChange={setConversation}
@@ -535,6 +671,9 @@ export function CallRoom({
               onFocus={(id) =>
                 setPinnedId((current) => (current === id ? null : id))
               }
+              blockedUserIds={blockedUserIds}
+              onBlockDm={blockDm}
+              onUnblockDm={unblockDm}
             />
           )}
         </AnimatePresence>
@@ -588,7 +727,7 @@ export function CallRoom({
       )}
 
       {prefs.reactionsVisible && <ReactionsLayer reactions={reactions} />}
-      <Toasts toasts={toasts} />
+      <Toasts toasts={toasts} onOpen={openToast} />
 
       <RoomSettings
         open={settingsOpen}
@@ -600,6 +739,7 @@ export function CallRoom({
         photoFull={profile.photoFull}
         devices={devices}
         room={room}
+        members={members}
         canAdmin={canAdmin}
         presence={presence}
         onSwitchDevice={switchDevice}
@@ -607,6 +747,9 @@ export function CallRoom({
         onRetryMedia={retryMedia}
         onSetPolicy={setJoinPolicy}
         onAdminAction={adminAction}
+        blockedUserIds={blockedUserIds}
+        onBlockDm={blockDm}
+        onUnblockDm={unblockDm}
       />
 
       <AnimatePresence>{overlay}</AnimatePresence>

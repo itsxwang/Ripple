@@ -3,6 +3,9 @@ import { LuMessageCircle, LuUsers, LuX } from "react-icons/lu";
 import type {
   AdminActionPayload,
   ChatMessage,
+  ChatReply,
+  DmBlockScope,
+  FocusMessage,
   JoinPolicy,
   LocalMute,
   Member,
@@ -20,6 +23,10 @@ interface SidebarProps {
   onClose: () => void;
   unreadTotal: number;
   members: Member[];
+  /** Live members plus departed members with DM history. */
+  chatMembers: Member[];
+  leftIds: Set<string>;
+  focusMessage: FocusMessage | null;
   selfId: string;
   selfUserId: string;
   messages: ChatMessage[];
@@ -27,7 +34,7 @@ interface SidebarProps {
   conversation: string;
   onConversationChange: (id: string) => void;
   unread: Record<string, number>;
-  onSend: (text: string, to?: string) => void;
+  onSend: (text: string, to?: string, replyTo?: ChatReply) => void;
   onTyping: (to?: string) => void;
   room: RoomInfo | null;
   speaking: string[];
@@ -42,6 +49,9 @@ interface SidebarProps {
   localMutes: Record<string, LocalMute>;
   onToggleLocalMute: (userId: string, kind: "audio" | "video") => void;
   onFocus: (id: string) => void;
+  blockedUserIds: Set<string>;
+  onBlockDm: (member: Member, scope: DmBlockScope) => void;
+  onUnblockDm: (userId: string) => void;
 }
 
 export function Sidebar({
@@ -50,6 +60,9 @@ export function Sidebar({
   onClose,
   unreadTotal,
   members,
+  chatMembers,
+  leftIds,
+  focusMessage,
   selfId,
   selfUserId,
   messages,
@@ -72,6 +85,9 @@ export function Sidebar({
   localMutes,
   onToggleLocalMute,
   onFocus,
+  blockedUserIds,
+  onBlockDm,
+  onUnblockDm,
 }: SidebarProps) {
   const requestCount = canAdmin ? (room?.requests?.length ?? 0) : 0;
 
@@ -142,7 +158,9 @@ export function Sidebar({
 
         {tab === "chat" ? (
           <ChatPanel
-            members={members.filter((member) => !member.isSelf)}
+            members={chatMembers.filter((member) => !member.isSelf)}
+            leftIds={leftIds}
+            focusMessage={focusMessage}
             selfId={selfId}
             messages={messages}
             typing={typing}
@@ -151,6 +169,8 @@ export function Sidebar({
             onSend={onSend}
             onTyping={onTyping}
             unread={unread}
+            blockedUserIds={blockedUserIds}
+            onUnblockDm={onUnblockDm}
           />
         ) : (
           <PeoplePanel
@@ -169,6 +189,9 @@ export function Sidebar({
             localMutes={localMutes}
             onToggleLocalMute={onToggleLocalMute}
             onFocus={onFocus}
+            blockedUserIds={blockedUserIds}
+            onBlockDm={onBlockDm}
+            onUnblockDm={onUnblockDm}
           />
         )}
       </motion.aside>

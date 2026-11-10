@@ -1,4 +1,4 @@
-import type { Prefs } from "../types";
+import type { DmBlock, DmBlockScope, Prefs } from "../types";
 
 const PREFS_KEY = "ripple:prefs";
 const IDENTITY_KEY = "ripple:identity";
@@ -8,7 +8,72 @@ export const DEFAULT_PREFS: Prefs = {
   camOn: true,
   reactionsVisible: true,
   reactionSounds: true,
+  notifyEveryone: true,
+  notifyDms: true,
+  dmNotifyOverrides: {},
+  dmBlocks: {},
 };
+
+function sanitizeOverrides(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== "object") return {};
+  const result: Record<string, boolean> = {};
+  for (const [userId, enabled] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (userId && typeof enabled === "boolean") result[userId] = enabled;
+  }
+  return result;
+}
+
+function sanitizeBlocks(value: unknown): Record<string, DmBlock> {
+  if (!value || typeof value !== "object") return {};
+  const result: Record<string, DmBlock> = {};
+  for (const [key, raw] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (!raw || typeof raw !== "object") continue;
+    const parsed = raw as Partial<DmBlock>;
+    const scope: DmBlockScope | null =
+      parsed.scope === "all"
+        ? "all"
+        : parsed.scope === "room"
+          ? "room"
+          : null;
+    if (!scope) continue;
+    const userId =
+      typeof parsed.userId === "string" && parsed.userId
+        ? parsed.userId
+        : key;
+    if (!userId) continue;
+    result[userId] = {
+      userId,
+      name:
+        typeof parsed.name === "string" && parsed.name
+          ? parsed.name
+          : "Member",
+      avatar:
+        typeof parsed.avatar === "string" && parsed.avatar
+          ? parsed.avatar
+          : "🚫",
+      photo:
+        typeof parsed.photo === "string" &&
+        parsed.photo.startsWith("data:image/")
+          ? parsed.photo
+          : undefined,
+      color:
+        typeof parsed.color === "string" && parsed.color
+          ? parsed.color
+          : "ember",
+      scope,
+      roomId:
+        scope === "room" && typeof parsed.roomId === "string"
+          ? parsed.roomId
+          : undefined,
+      ts: typeof parsed.ts === "number" ? parsed.ts : Date.now(),
+    };
+  }
+  return result;
+}
 
 export function loadPrefs(): Prefs {
   try {
@@ -20,6 +85,10 @@ export function loadPrefs(): Prefs {
       camOn: parsed.camOn !== false,
       reactionsVisible: parsed.reactionsVisible !== false,
       reactionSounds: parsed.reactionSounds !== false,
+      notifyEveryone: parsed.notifyEveryone !== false,
+      notifyDms: parsed.notifyDms !== false,
+      dmNotifyOverrides: sanitizeOverrides(parsed.dmNotifyOverrides),
+      dmBlocks: sanitizeBlocks(parsed.dmBlocks),
       audioDeviceId:
         typeof parsed.audioDeviceId === "string"
           ? parsed.audioDeviceId
