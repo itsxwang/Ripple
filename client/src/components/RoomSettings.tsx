@@ -30,7 +30,7 @@ import type {
 } from "../types";
 import type { DeviceList } from "../lib/media";
 import { playTestTone } from "../lib/media";
-import { blockScopeLabel } from "../lib/dm";
+import { blockScopeLabel, ignoredMembers } from "../lib/dm";
 import { useAudioLevel } from "../hooks/useAudioLevel";
 import { MediaTest } from "./MediaTest";
 import { Avatar } from "./Avatar";
@@ -54,8 +54,11 @@ interface RoomSettingsProps {
   onSetPolicy: (policy: JoinPolicy) => void;
   onAdminAction: (payload: AdminActionPayload) => void;
   blockedUserIds: Set<string>;
+  ignoredUserIds: Set<string>;
   onBlockDm: (member: Member, scope: DmBlockScope) => void;
   onUnblockDm: (userId: string) => void;
+  onIgnore: (member: Member) => void;
+  onUnignore: (userId: string) => void;
 }
 
 function ToggleRow({
@@ -131,8 +134,11 @@ export function RoomSettings({
   onSetPolicy,
   onAdminAction,
   blockedUserIds,
+  ignoredUserIds,
   onBlockDm,
   onUnblockDm,
+  onIgnore,
+  onUnignore,
 }: RoomSettingsProps) {
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [testMicOn, setTestMicOn] = useState(true);
@@ -146,6 +152,7 @@ export function RoomSettings({
   const policy = room?.joinPolicy ?? "open";
   const others = members.filter((member) => !member.isSelf);
   const blocks = Object.values(prefs.dmBlocks).sort((a, b) => b.ts - a.ts);
+  const ignored = ignoredMembers(prefs);
 
   /**
    * The in-room media test is strictly local: clone the live capture tracks
@@ -440,6 +447,7 @@ export function RoomSettings({
                       const notifyOn =
                         prefs.dmNotifyOverrides[member.userId] !== false;
                       const activeBlock = blockedUserIds.has(member.userId);
+                      const activeIgnore = ignoredUserIds.has(member.userId);
                       const chooserOpen = blockFor === member.userId;
                       return (
                         <div
@@ -447,7 +455,9 @@ export function RoomSettings({
                           className={`rounded-xl px-1.5 py-1.5 ${
                             activeBlock
                               ? "bg-rose-500/[0.07] ring-1 ring-inset ring-rose-400/20"
-                              : ""
+                              : activeIgnore
+                                ? "bg-amber-300/[0.05] ring-1 ring-inset ring-amber-300/20"
+                                : ""
                           }`}
                         >
                           <div className="flex items-center gap-2">
@@ -456,6 +466,9 @@ export function RoomSettings({
                               color={member.color}
                               photo={member.photo}
                               size="xs"
+                              className={
+                                activeIgnore ? "opacity-70 grayscale" : undefined
+                              }
                             />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-[11px] font-medium text-white/80">
@@ -464,9 +477,11 @@ export function RoomSettings({
                               <p className="text-[9px] leading-snug text-white/30">
                                 {activeBlock
                                   ? "Direct messages blocked"
-                                  : notifyOn
-                                    ? "DM notifications on"
-                                    : "DM notifications muted"}
+                                  : activeIgnore
+                                    ? "Ignored · no notifications"
+                                    : notifyOn
+                                      ? "DM notifications on"
+                                      : "DM notifications muted"}
                               </p>
                             </div>
                             <button
@@ -533,6 +548,35 @@ export function RoomSettings({
                                 <LuBell className="h-3.5 w-3.5" />
                               ) : (
                                 <LuBellOff className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                activeIgnore
+                                  ? onUnignore(member.userId)
+                                  : onIgnore(member)
+                              }
+                              aria-label={
+                                activeIgnore
+                                  ? `Unignore ${member.name} (settings)`
+                                  : `Ignore ${member.name} (settings)`
+                              }
+                              title={
+                                activeIgnore
+                                  ? `Unignore ${member.name}`
+                                  : `Ignore ${member.name}`
+                              }
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition ${
+                                activeIgnore
+                                  ? "border-amber-300/30 bg-amber-300/15 text-amber-200 hover:bg-amber-300/25"
+                                  : "border-white/8 bg-white/[0.03] text-white/35 hover:border-amber-300/25 hover:bg-amber-300/10 hover:text-amber-200"
+                              }`}
+                            >
+                              {activeIgnore ? (
+                                <LuEye className="h-3.5 w-3.5" />
+                              ) : (
+                                <LuEyeOff className="h-3.5 w-3.5" />
                               )}
                             </button>
                           </div>
@@ -616,6 +660,52 @@ export function RoomSettings({
                           className="shrink-0 rounded-lg border border-rose-300/25 bg-rose-400/15 px-2 py-1 text-[9px] font-semibold text-rose-100 transition hover:bg-rose-400/25"
                         >
                           Unblock
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-2 rounded-xl border border-white/8 bg-black/20 p-2">
+                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+                  <LuEyeOff className="h-3 w-3 text-amber-300/80" />
+                  Ignored members · {ignored.length}
+                </p>
+                {ignored.length === 0 ? (
+                  <p className="px-1 py-1 text-[10px] text-white/25">
+                    You haven't ignored anyone. Ignored messages still arrive,
+                    without notifications.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {ignored.map((entry) => (
+                      <div
+                        key={entry.userId}
+                        className="flex items-center gap-2 rounded-lg bg-amber-300/[0.06] px-1.5 py-1.5"
+                      >
+                        <Avatar
+                          avatar={entry.avatar}
+                          color={entry.color}
+                          photo={entry.photo}
+                          size="xs"
+                          className="opacity-70 grayscale"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[11px] font-medium text-amber-100/90">
+                            {entry.name}
+                          </p>
+                          <p className="truncate text-[9px] text-amber-200/45">
+                            Messages arrive · notifications off
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onUnignore(entry.userId)}
+                          aria-label={`Unignore ${entry.name} (ignored list)`}
+                          className="shrink-0 rounded-lg border border-amber-300/25 bg-amber-300/15 px-2 py-1 text-[9px] font-semibold text-amber-100 transition hover:bg-amber-300/25"
+                        >
+                          Unignore
                         </button>
                       </div>
                     ))}

@@ -64,8 +64,11 @@ interface PeoplePanelProps {
   onToggleLocalMute: (userId: string, kind: "audio" | "video") => void;
   onFocus: (id: string) => void;
   blockedUserIds: Set<string>;
+  ignoredUserIds: Set<string>;
   onBlockDm: (member: Member, scope: DmBlockScope) => void;
   onUnblockDm: (userId: string) => void;
+  onIgnore: (member: Member) => void;
+  onUnignore: (userId: string) => void;
 }
 
 interface ActionButtonProps {
@@ -133,8 +136,11 @@ export function PeoplePanel({
   onToggleLocalMute,
   onFocus,
   blockedUserIds,
+  ignoredUserIds,
   onBlockDm,
   onUnblockDm,
+  onIgnore,
+  onUnignore,
 }: PeoplePanelProps) {
   const [copied, setCopied] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -180,6 +186,7 @@ export function PeoplePanel({
             const banOpen = banFor === member.userId;
             const blockOpen = blockFor === member.id;
             const dmBlocked = blockedUserIds.has(member.userId);
+            const ignored = ignoredUserIds.has(member.userId);
             const local = localMutes[member.userId] ?? {
               audio: false,
               video: false,
@@ -191,10 +198,12 @@ export function PeoplePanel({
                 className={`rounded-2xl px-2 py-1.5 transition ${
                   dmBlocked
                     ? "bg-rose-500/[0.06] ring-1 ring-inset ring-rose-400/25"
-                    : "hover:bg-white/[0.025]"
+                    : ignored
+                      ? "bg-amber-300/[0.045] ring-1 ring-inset ring-amber-300/20"
+                      : "hover:bg-white/[0.025]"
                 }`}
               >
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-1.5">
                   <Avatar
                     avatar={member.avatar}
                     color={member.color}
@@ -234,6 +243,12 @@ export function PeoplePanel({
                           DM blocked
                         </span>
                       )}
+                      {ignored && (
+                        <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-amber-300/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-amber-200">
+                          <LuEyeOff className="h-2.5 w-2.5" />
+                          Ignored
+                        </span>
+                      )}
                     </p>
                     <p className="flex min-w-0 items-start gap-1.5 text-[11px] leading-relaxed text-white/35">
                       {member.handRaised && (
@@ -243,6 +258,11 @@ export function PeoplePanel({
                         <span className="flex min-w-0 items-center gap-1 text-rose-300/80">
                           <LuBellOff className="h-3 w-3 shrink-0" />
                           Direct messages blocked
+                        </span>
+                      ) : ignored ? (
+                        <span className="flex min-w-0 items-center gap-1 text-amber-300/80">
+                          <LuEyeOff className="h-3 w-3 shrink-0" />
+                          Ignored · messages arrive without notifications
                         </span>
                       ) : member.restricted.mic || member.restricted.cam ? (
                         <span className="text-amber-300/80">restricted</span>
@@ -336,7 +356,7 @@ export function PeoplePanel({
                     <button
                       type="button"
                       onClick={() => onMessage(member.id)}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-white/45 transition hover:border-violet-300/30 hover:bg-violet-300/15 hover:text-violet-200"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border border-white/8 bg-white/[0.04] text-white/45 transition hover:border-violet-300/30 hover:bg-violet-300/15 hover:text-violet-200"
                       aria-label={`Message ${member.name}`}
                     >
                       <LuMessageSquare className="h-3.5 w-3.5" />
@@ -365,7 +385,7 @@ export function PeoplePanel({
                           : `Block DMs from ${member.name}`
                       }
                       aria-expanded={blockOpen}
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition ${
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border transition ${
                         dmBlocked
                           ? "border-rose-400/30 bg-rose-500/15 text-rose-200 hover:bg-rose-500/25"
                           : blockOpen
@@ -381,6 +401,38 @@ export function PeoplePanel({
                     </button>
                   )}
 
+                  {!isSelf && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        ignored
+                          ? onUnignore(member.userId)
+                          : onIgnore(member)
+                      }
+                      title={
+                        ignored
+                          ? `Unignore ${member.name}`
+                          : `Ignore ${member.name}`
+                      }
+                      aria-label={
+                        ignored
+                          ? `Unignore ${member.name}`
+                          : `Ignore ${member.name}`
+                      }
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border transition ${
+                        ignored
+                          ? "border-amber-300/30 bg-amber-300/15 text-amber-200 hover:bg-amber-300/25"
+                          : "border-white/8 bg-white/[0.04] text-white/40 hover:border-amber-300/25 hover:bg-amber-300/10 hover:text-amber-200"
+                      }`}
+                    >
+                      {ignored ? (
+                        <LuEye className="h-3.5 w-3.5" />
+                      ) : (
+                        <LuEyeOff className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+
                   {canAdmin && !isSelf && (
                     <button
                       type="button"
@@ -389,7 +441,7 @@ export function PeoplePanel({
                         setBanFor(null);
                         setBanReason("");
                       }}
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition ${
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-xl border transition ${
                         menuOpen
                           ? "border-lime-300/30 bg-lime-300/15 text-lime-200"
                           : "border-white/8 bg-white/[0.04] text-white/40 hover:bg-white/10 hover:text-white"

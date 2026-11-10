@@ -50,8 +50,11 @@ interface SidebarProps {
   onToggleLocalMute: (userId: string, kind: "audio" | "video") => void;
   onFocus: (id: string) => void;
   blockedUserIds: Set<string>;
+  ignoredUserIds: Set<string>;
   onBlockDm: (member: Member, scope: DmBlockScope) => void;
   onUnblockDm: (userId: string) => void;
+  onIgnore: (member: Member) => void;
+  onUnignore: (userId: string) => void;
 }
 
 export function Sidebar({
@@ -86,8 +89,11 @@ export function Sidebar({
   onToggleLocalMute,
   onFocus,
   blockedUserIds,
+  ignoredUserIds,
   onBlockDm,
   onUnblockDm,
+  onIgnore,
+  onUnignore,
 }: SidebarProps) {
   const requestCount = canAdmin ? (room?.requests?.length ?? 0) : 0;
 
@@ -170,7 +176,9 @@ export function Sidebar({
             onTyping={onTyping}
             unread={unread}
             blockedUserIds={blockedUserIds}
+            ignoredUserIds={ignoredUserIds}
             onUnblockDm={onUnblockDm}
+            onUnignore={onUnignore}
           />
         ) : (
           <PeoplePanel
@@ -190,8 +198,11 @@ export function Sidebar({
             onToggleLocalMute={onToggleLocalMute}
             onFocus={onFocus}
             blockedUserIds={blockedUserIds}
+            ignoredUserIds={ignoredUserIds}
             onBlockDm={onBlockDm}
             onUnblockDm={onUnblockDm}
+            onIgnore={onIgnore}
+            onUnignore={onUnignore}
           />
         )}
       </motion.aside>

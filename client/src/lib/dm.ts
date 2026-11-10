@@ -1,4 +1,4 @@
-import type { DmBlock, Prefs } from "../types";
+import type { DmBlock, IgnoredMember, Prefs } from "../types";
 
 /**
  * Room-scoped blocks only apply inside the room they were created in.
@@ -11,6 +11,20 @@ export function isDmBlocked(
   if (!block) return false;
   if (block.scope === "all") return true;
   return Boolean(roomId) && block.roomId === roomId;
+}
+
+/** Ignored members still reach the message list; only notifications pause. */
+export function isIgnored(prefs: Prefs, userId?: string | null): boolean {
+  if (!userId) return false;
+  return Boolean(prefs.ignoredUsers[userId]);
+}
+
+export function ignoredUserIds(prefs: Prefs): Set<string> {
+  return new Set(Object.keys(prefs.ignoredUsers));
+}
+
+export function ignoredMembers(prefs: Prefs): IgnoredMember[] {
+  return Object.values(prefs.ignoredUsers).sort((a, b) => b.ts - a.ts);
 }
 
 /** Global DM toasts are the master switch; per-member overrides can mute more. */

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   LuArrowUp,
   LuBellOff,
+  LuEyeOff,
   LuLock,
   LuMessageCircle,
   LuReply,
@@ -33,7 +34,9 @@ interface ChatPanelProps {
   onTyping: (to?: string) => void;
   unread: Record<string, number>;
   blockedUserIds: Set<string>;
+  ignoredUserIds: Set<string>;
   onUnblockDm: (userId: string) => void;
+  onUnignore: (userId: string) => void;
 }
 
 export function ChatPanel({
@@ -49,7 +52,9 @@ export function ChatPanel({
   onTyping,
   unread,
   blockedUserIds,
+  ignoredUserIds,
   onUnblockDm,
+  onUnignore,
 }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
@@ -65,6 +70,9 @@ export function ChatPanel({
   const left = Boolean(activeMember && leftIds.has(activeMember.id));
   const blocked = Boolean(
     activeMember && blockedUserIds.has(activeMember.userId),
+  );
+  const ignored = Boolean(
+    activeMember && ignoredUserIds.has(activeMember.userId),
   );
   const readOnly = blocked || left;
 
@@ -202,9 +210,10 @@ export function ChatPanel({
           </button>
 
           {members.map((member) => {
-            const count = unread[member.id] ?? 0;
             const memberBlocked = blockedUserIds.has(member.userId);
+            const memberIgnored = ignoredUserIds.has(member.userId);
             const memberLeft = leftIds.has(member.id);
+            const count = memberIgnored ? 0 : (unread[member.id] ?? 0);
             return (
               <button
                 key={member.id}
@@ -215,7 +224,9 @@ export function ChatPanel({
                     ? `${member.name} left the room — history is kept`
                     : memberBlocked
                       ? `Direct messages from ${member.name} are blocked`
-                      : undefined
+                      : memberIgnored
+                        ? `${member.name} is ignored — their messages arrive without notifications`
+                        : undefined
                 }
                 className={`relative flex shrink-0 items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-xs font-medium transition ${
                   conversation === member.id
@@ -223,12 +234,16 @@ export function ChatPanel({
                       ? "border-dashed border-white/20 bg-white/[0.06] text-white/65"
                       : memberBlocked
                         ? "border-rose-400/40 bg-rose-400/15 text-rose-100"
-                        : "border-violet-300/40 bg-violet-300/15 text-violet-100"
+                        : memberIgnored
+                          ? "border-amber-300/40 bg-amber-300/15 text-amber-100"
+                          : "border-violet-300/40 bg-violet-300/15 text-violet-100"
                     : memberLeft
                       ? "border-dashed border-white/10 bg-white/[0.015] text-white/40 hover:bg-white/[0.06] hover:text-white/65"
                       : memberBlocked
                         ? "border-rose-400/25 bg-rose-500/[0.07] text-rose-200/80 hover:bg-rose-500/15 hover:text-rose-100"
-                        : "border-white/8 bg-white/[0.03] text-white/55 hover:bg-white/8 hover:text-white/80"
+                        : memberIgnored
+                          ? "border-amber-300/20 bg-amber-400/[0.05] text-amber-200/70 hover:bg-amber-400/10 hover:text-amber-100"
+                          : "border-white/8 bg-white/[0.03] text-white/55 hover:bg-white/8 hover:text-white/80"
                 }`}
               >
                 <Avatar
@@ -236,13 +251,25 @@ export function ChatPanel({
                   color={member.color}
                   photo={member.photo}
                   size="xs"
-                  className={memberLeft ? "opacity-55 grayscale" : undefined}
+                  className={
+                    memberLeft
+                      ? "opacity-55 grayscale"
+                      : memberIgnored
+                        ? "opacity-70 grayscale"
+                        : undefined
+                  }
                 />
                 <span className="max-w-24 truncate">{member.name}</span>
                 {memberLeft && (
                   <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-white/8 px-1 py-px text-[8px] font-bold uppercase tracking-wider text-white/45">
                     <LuUserMinus className="h-2.5 w-2.5" />
                     left
+                  </span>
+                )}
+                {memberIgnored && !memberLeft && (
+                  <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-amber-300/15 px-1 py-px text-[8px] font-bold uppercase tracking-wider text-amber-200/80">
+                    <LuEyeOff className="h-2.5 w-2.5" />
+                    ignored
                   </span>
                 )}
                 {memberBlocked && (
@@ -299,6 +326,23 @@ export function ChatPanel({
           </div>
         ) : (
           <div className="flex flex-col gap-3">
+            {direct && ignored && !left && activeMember && (
+              <div className="flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.06] px-2.5 py-2">
+                <LuBellOff className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                <p className="min-w-0 flex-1 text-[10px] leading-relaxed text-amber-100/70">
+                  {activeMember.name} is ignored. Their messages still arrive
+                  here, but their notifications and unread badges are off.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onUnignore(activeMember.userId)}
+                  aria-label={`Unignore ${activeMember.name}`}
+                  className="shrink-0 rounded-lg border border-amber-300/25 bg-amber-300/10 px-2 py-1 text-[9px] font-semibold text-amber-100 transition hover:bg-amber-300/20"
+                >
+                  Unignore
+                </button>
+              </div>
+            )}
             <AnimatePresence initial={false}>
               {visible.map((message) => {
                 if (message.system) {

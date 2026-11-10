@@ -1,4 +1,4 @@
-import type { DmBlock, DmBlockScope, Prefs } from "../types";
+import type { DmBlock, DmBlockScope, IgnoredMember, Prefs } from "../types";
 
 const PREFS_KEY = "ripple:prefs";
 const IDENTITY_KEY = "ripple:identity";
@@ -12,6 +12,7 @@ export const DEFAULT_PREFS: Prefs = {
   notifyDms: true,
   dmNotifyOverrides: {},
   dmBlocks: {},
+  ignoredUsers: {},
 };
 
 function sanitizeOverrides(value: unknown): Record<string, boolean> {
@@ -75,6 +76,44 @@ function sanitizeBlocks(value: unknown): Record<string, DmBlock> {
   return result;
 }
 
+function sanitizeIgnored(value: unknown): Record<string, IgnoredMember> {
+  if (!value || typeof value !== "object") return {};
+  const result: Record<string, IgnoredMember> = {};
+  for (const [key, raw] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    if (!raw || typeof raw !== "object") continue;
+    const parsed = raw as Partial<IgnoredMember>;
+    const userId =
+      typeof parsed.userId === "string" && parsed.userId
+        ? parsed.userId
+        : key;
+    if (!userId) continue;
+    result[userId] = {
+      userId,
+      name:
+        typeof parsed.name === "string" && parsed.name
+          ? parsed.name
+          : "Member",
+      avatar:
+        typeof parsed.avatar === "string" && parsed.avatar
+          ? parsed.avatar
+          : "🙈",
+      photo:
+        typeof parsed.photo === "string" &&
+        parsed.photo.startsWith("data:image/")
+          ? parsed.photo
+          : undefined,
+      color:
+        typeof parsed.color === "string" && parsed.color
+          ? parsed.color
+          : "ember",
+      ts: typeof parsed.ts === "number" ? parsed.ts : Date.now(),
+    };
+  }
+  return result;
+}
+
 export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -89,6 +128,7 @@ export function loadPrefs(): Prefs {
       notifyDms: parsed.notifyDms !== false,
       dmNotifyOverrides: sanitizeOverrides(parsed.dmNotifyOverrides),
       dmBlocks: sanitizeBlocks(parsed.dmBlocks),
+      ignoredUsers: sanitizeIgnored(parsed.ignoredUsers),
       audioDeviceId:
         typeof parsed.audioDeviceId === "string"
           ? parsed.audioDeviceId

@@ -31,7 +31,9 @@ import {
 import {
   blockedUserIdsForRoom,
   dmNotificationsEnabled,
+  ignoredUserIds as ignoredIdsFromPrefs,
   isDmBlocked,
+  isIgnored,
 } from "../lib/dm";
 import { copyText } from "../lib/clipboard";
 import { Aurora } from "./Aurora";
@@ -150,6 +152,8 @@ export function CallRoom({
     retryMedia,
     blockDm,
     unblockDm,
+    ignoreMember,
+    unignoreMember,
   } = engine;
 
   const [panel, setPanel] = useState<PanelTab | null>(null);
@@ -168,6 +172,10 @@ export function CallRoom({
   const blockedUserIds = useMemo(
     () => blockedUserIdsForRoom(prefs.dmBlocks, roomId),
     [prefs.dmBlocks, roomId],
+  );
+  const ignoredUserIds = useMemo(
+    () => ignoredIdsFromPrefs(prefs),
+    [prefs],
   );
   /* Safety net for DMs that were already in memory when a block was added. */
   const visibleMessages = useMemo(
@@ -309,6 +317,12 @@ export function CallRoom({
     const map: Record<string, number> = {};
     for (const message of visibleMessages) {
       if (message.system || message.from === selfId) continue;
+      const senderUserId =
+        message.fromUserId ??
+        others.find((member) => member.id === message.from)?.userId;
+      /* Ignored members still appear in the transcript, but never add a
+         badge or a "new messages" nudge. */
+      if (isIgnored(prefs, senderUserId)) continue;
       const key = message.to
         ? message.to === selfId
           ? message.from
@@ -319,7 +333,7 @@ export function CallRoom({
       }
     }
     return map;
-  }, [visibleMessages, seen, selfId]);
+  }, [visibleMessages, seen, selfId, prefs, others]);
 
   const unreadTotal = useMemo(
     () => Object.values(unread).reduce((total, value) => total + value, 0),
@@ -345,6 +359,10 @@ export function CallRoom({
     const senderUserId =
       last.fromUserId ??
       others.find((member) => member.id === last.from)?.userId;
+
+    /* Ignoring is not blocking: the message is already in the transcript,
+       but it must not raise a toast or an unread nudge. */
+    if (isIgnored(prefs, senderUserId)) return;
 
     if (last.to) {
       if (last.to !== selfId) return;
@@ -672,8 +690,11 @@ export function CallRoom({
                 setPinnedId((current) => (current === id ? null : id))
               }
               blockedUserIds={blockedUserIds}
+              ignoredUserIds={ignoredUserIds}
               onBlockDm={blockDm}
               onUnblockDm={unblockDm}
+              onIgnore={ignoreMember}
+              onUnignore={unignoreMember}
             />
           )}
         </AnimatePresence>
@@ -748,8 +769,11 @@ export function CallRoom({
         onSetPolicy={setJoinPolicy}
         onAdminAction={adminAction}
         blockedUserIds={blockedUserIds}
+        ignoredUserIds={ignoredUserIds}
         onBlockDm={blockDm}
         onUnblockDm={unblockDm}
+        onIgnore={ignoreMember}
+        onUnignore={unignoreMember}
       />
 
       <AnimatePresence>{overlay}</AnimatePresence>

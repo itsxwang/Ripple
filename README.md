@@ -47,6 +47,11 @@ and real moderation tools. No accounts, no downloads, no recordings.
 - **Notification control** — choose whether messages to everyone notify you,
   switch all DM toasts off, or mute toasts for one specific member. Settings
   remembers these choices per viewer.
+- **Ignoring a member** — ignore someone to keep receiving their messages while
+  silencing their toasts and unread badges in the chat panel. Ignored members
+  get a distinct amber style and an "ignored" badge in People and chat, and can
+  be unignored from People, the chat banner, or the ignored-members list in
+  settings. Ignore persists across meetings and rejoins.
 - **DM blocking** — block a member's direct messages for the current meeting or
   for all meetings. Their DMs are suppressed entirely (no messages, unread
   badges or toasts) until you unblock them. Blocked members stay highlighted in

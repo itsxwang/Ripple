@@ -15,6 +15,7 @@ import type {
   ChatReply,
   DmBlock,
   DmBlockScope,
+  IgnoredMember,
   JoinIntent,
   JoinPolicy,
   LocalMute,
@@ -1217,6 +1218,39 @@ export function useCall(
     [onPrefsChange],
   );
 
+  /** Ignore keeps their messages but silences toasts and unread counts. */
+  const ignoreMember = useCallback(
+    (member: Member) => {
+      if (member.isSelf) return;
+      const entry: IgnoredMember = {
+        userId: member.userId,
+        name: member.name,
+        avatar: member.avatar,
+        photo: member.photo,
+        color: member.color,
+        ts: Date.now(),
+      };
+      const ignoredUsers = {
+        ...prefsRef.current.ignoredUsers,
+        [member.userId]: entry,
+      };
+      prefsRef.current = { ...prefsRef.current, ignoredUsers };
+      onPrefsChange({ ignoredUsers });
+    },
+    [onPrefsChange],
+  );
+
+  const unignoreMember = useCallback(
+    (targetUserId: string) => {
+      if (!prefsRef.current.ignoredUsers[targetUserId]) return;
+      const ignoredUsers = { ...prefsRef.current.ignoredUsers };
+      delete ignoredUsers[targetUserId];
+      prefsRef.current = { ...prefsRef.current, ignoredUsers };
+      onPrefsChange({ ignoredUsers });
+    },
+    [onPrefsChange],
+  );
+
   const refreshDevices = useCallback(async () => {
     const list = await enumerateDevices();
     setDevices(list);
@@ -2106,6 +2140,8 @@ export function useCall(
     retryMedia,
     blockDm,
     unblockDm,
+    ignoreMember,
+    unignoreMember,
   };
 }
 

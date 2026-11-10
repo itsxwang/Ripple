@@ -24,6 +24,16 @@ export interface DmBlock {
   ts: number;
 }
 
+/** A viewer-side ignore: messages still arrive, notifications stay quiet. */
+export interface IgnoredMember {
+  userId: string;
+  name: string;
+  avatar: string;
+  photo?: string;
+  color: string;
+  ts: number;
+}
+
 export interface MediaState {
   micOn: boolean;
   camOn: boolean;
@@ -149,6 +159,8 @@ export interface Prefs {
   dmNotifyOverrides: Record<string, boolean>;
   /** Viewer-side DM blocks keyed by the blocked member's stable userId. */
   dmBlocks: Record<string, DmBlock>;
+  /** Members whose messages still arrive but never toast or count as unread. */
+  ignoredUsers: Record<string, IgnoredMember>;
   audioDeviceId?: string;
   videoDeviceId?: string;
 }
